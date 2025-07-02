@@ -730,20 +730,42 @@ function saveGroupSettings() {
 
 // Sistema de reconexão automática
 let reconnectAttempts = 0;
+let isReconnecting = false;
 
 client.on('disconnected', async (reason) => {
     console.log(`❌ Conexão perdida (${reason}), tentando reconectar...`);
     reconnectAttempts++;
+    isReconnecting = true;
     await new Promise(resolve => setTimeout(resolve, CONFIG.reconnectDelay));
     try {
         await client.initialize();
         reconnectAttempts = 0;
+        isReconnecting = false;
         console.log('✅ Reconexão bem-sucedida!');
     } catch (err) {
         console.error(`Tentativa ${reconnectAttempts} falhou:`, err);
         // Não encerra o processo, tenta de novo na próxima desconexão
     }
 });
+
+// Heartbeat para checar sessão a cada 1 minuto
+setInterval(async () => {
+    if (isReconnecting) return;
+    try {
+        if (!client.info || !client.info.wid) {
+            console.warn('[HEARTBEAT] Sessão não ativa, tentando reconectar...');
+            isReconnecting = true;
+            await client.initialize();
+            isReconnecting = false;
+            console.log('[HEARTBEAT] Reconexão forçada bem-sucedida!');
+        } else {
+            console.log('[HEARTBEAT] Sessão ativa:', client.info.wid._serialized);
+        }
+    } catch (err) {
+        console.error('[HEARTBEAT] Erro ao checar/reconectar sessão:', err);
+        isReconnecting = false;
+    }
+}, 60 * 1000);
 
 // Inicializa o bot
 client.initialize().catch(error => {
