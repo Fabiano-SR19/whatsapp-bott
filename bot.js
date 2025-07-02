@@ -758,9 +758,8 @@ setInterval(async () => {
             await client.initialize();
             isReconnecting = false;
             console.log('[HEARTBEAT] Reconexão forçada bem-sucedida!');
-        } else {
-            console.log('[HEARTBEAT] Sessão ativa:', client.info.wid._serialized);
         }
+        // Removido o log de sessão ativa para reduzir spam
     } catch (err) {
         console.error('[HEARTBEAT] Erro ao checar/reconectar sessão:', err);
         isReconnecting = false;
