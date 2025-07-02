@@ -105,6 +105,7 @@ const client = new Client({
 // Armazenamento de estado
 let groupSettings = {};
 const groupMembersCache = new Map();
+const chatMetadataCache = new Map(); // Cache para metadata de chats
 
 // Carrega configurações salvas
 if (fs.existsSync('group_settings.json')) {
@@ -372,17 +373,37 @@ async function setAutoMessageText(chat, msg) {
 // Função para obter informações do chat
 async function getChatInfo(msg) {
     try {
-        const chat = await msg.getChat();
-        const isGroup = chat.isGroup;
+        // Primeiro, tenta obter informações básicas da mensagem sem usar getChat()
+        const chatId = msg.chat?.id?._serialized || msg.from;
+        const isGroup = chatId && chatId.includes('@g.us');
+        
+        if (!chatId) {
+            console.error('[CHAT] Não foi possível obter ID do chat');
+            return null;
+        }
+        
+        // Cria um objeto chat básico
+        const chat = {
+            id: { _serialized: chatId },
+            isGroup: isGroup,
+            name: 'Grupo' // Nome padrão
+        };
+        
         let participants = [];
         
+        // Só tenta obter metadata se for grupo
         if (isGroup) {
             try {
-                const metadata = await client.getChatById(chat.id._serialized);
-                participants = metadata.participants;
+                const metadata = await getChatMetadata(chatId);
+                if (metadata && metadata.participants) {
+                    participants = metadata.participants;
+                    if (metadata.name) {
+                        chat.name = metadata.name;
+                    }
+                }
             } catch (metadataError) {
-                console.error('Erro ao obter metadata do chat:', metadataError);
-                // Se não conseguir obter metadata, continua sem participantes
+                console.error('Erro ao obter metadata do chat:', metadataError.message);
+                // Continua sem participantes, mas não falha
                 participants = [];
             }
         }
@@ -393,26 +414,54 @@ async function getChatInfo(msg) {
             participants
         };
     } catch (error) {
-        console.error('Erro ao obter info do chat:', error);
+        console.error('Erro ao obter info do chat:', error.message);
         
-        // Se o erro for relacionado ao chat não encontrado, tenta uma abordagem diferente
-        if (error.message.includes('getChat') || error.message.includes('Cannot read properties')) {
-            console.log('[RECUPERAÇÃO] Tentando recuperar informações do chat...');
-            try {
-                // Tenta obter informações básicas da mensagem
-                const chatId = msg.chat?.id?._serialized || msg.from;
-                if (chatId) {
-                    return {
-                        chat: { id: { _serialized: chatId }, isGroup: chatId.includes('@g.us') },
+        // Fallback: tenta obter informações mínimas
+        try {
+            const chatId = msg.from || msg.chat?.id?._serialized;
+            if (chatId) {
+                return {
+                    chat: { 
+                        id: { _serialized: chatId }, 
                         isGroup: chatId.includes('@g.us'),
-                        participants: []
-                    };
-                }
-            } catch (recoveryError) {
-                console.error('[RECUPERAÇÃO] Erro na recuperação:', recoveryError);
+                        name: 'Chat'
+                    },
+                    isGroup: chatId.includes('@g.us'),
+                    participants: []
+                };
+            }
+        } catch (fallbackError) {
+            console.error('[FALLBACK] Erro no fallback:', fallbackError.message);
+        }
+        
+        return null;
+    }
+}
+
+// Função para obter metadata com cache
+async function getChatMetadata(chatId) {
+    try {
+        // Verifica cache primeiro
+        const cached = chatMetadataCache.get(chatId);
+        if (cached && (Date.now() - cached.timestamp) < 30000) { // Cache válido por 30 segundos
+            return cached.data;
+        }
+        
+        // Se não está no cache ou expirou, busca do WhatsApp
+        if (connectionStatus === 'connected' && client.info && client.info.wid) {
+            const metadata = await client.getChatById(chatId);
+            if (metadata) {
+                chatMetadataCache.set(chatId, {
+                    data: metadata,
+                    timestamp: Date.now()
+                });
+                return metadata;
             }
         }
         
+        return null;
+    } catch (error) {
+        console.error(`[METADATA] Erro ao obter metadata para ${chatId}:`, error.message);
         return null;
     }
 }
@@ -438,13 +487,18 @@ async function isUserAdmin(msg, participants) {
         if (!participants || !Array.isArray(participants)) {
             console.log('[ADMIN] Sem participantes disponíveis, tentando buscar metadata...');
             try {
-                participants = await retryOperation(async () => {
-                    const chat = await msg.getChat();
-                    const metadata = await client.getChatById(chat.id._serialized);
-                    return metadata.participants;
-                });
+                // Só tenta buscar metadata se o cliente estiver estável
+                if (connectionStatus === 'connected' && client.info && client.info.wid) {
+                    const chatId = msg.chat?.id?._serialized || msg.from;
+                    if (chatId && chatId.includes('@g.us')) {
+                        participants = await retryOperation(async () => {
+                            const metadata = await client.getChatById(chatId);
+                            return metadata.participants || [];
+                        });
+                    }
+                }
             } catch (metadataError) {
-                console.error('[ADMIN] Erro ao buscar metadata após retry:', metadataError);
+                console.error('[ADMIN] Erro ao buscar metadata após retry:', metadataError.message);
                 return false;
             }
         }
@@ -665,14 +719,19 @@ async function handleCommand(msg) {
         // Verificar se o bot é admin (com tratamento de erro)
         let botIsAdmin = false;
         try {
-            const metadata = await client.getChatById(chat.id._serialized);
-            const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
-            console.log(`[DEBUG] Admins do grupo:`, adminIds);
-            console.log(`[DEBUG] Meu ID: ${client.info.wid._serialized}`);
-            botIsAdmin = adminIds.includes(client.info.wid._serialized);
-            console.log(`[DEBUG] Bot é admin? ${botIsAdmin}`);
+            // Só verifica admin se for grupo
+            if (isGroup) {
+                const metadata = await getChatMetadata(chat.id._serialized);
+                if (metadata && metadata.participants) {
+                    const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+                    console.log(`[DEBUG] Admins do grupo:`, adminIds);
+                    console.log(`[DEBUG] Meu ID: ${client.info.wid._serialized}`);
+                    botIsAdmin = adminIds.includes(client.info.wid._serialized);
+                    console.log(`[DEBUG] Bot é admin? ${botIsAdmin}`);
+                }
+            }
         } catch (metadataError) {
-            console.error('[COMANDO] Erro ao verificar admin:', metadataError);
+            console.error('[COMANDO] Erro ao verificar admin:', metadataError.message);
             // Se não conseguir verificar admin, assume que não é admin por segurança
             botIsAdmin = false;
         }
