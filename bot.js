@@ -438,12 +438,13 @@ async function handleCommand(msg) {
         
         const { chat, isGroup, participants } = chatInfo;
         
-        // Verificar se o bot é admin
+        // Verificar se o bot é admin (sempre buscar metadata mais recente)
         const metadata = await client.getChatById(chat.id._serialized);
-        const botIsAdmin = metadata.participants.find(
-            p => p.id._serialized === client.info.wid._serialized && (p.isAdmin || p.isSuperAdmin)
-        );
-        console.log(`[DEBUG] Bot é admin? ${!!botIsAdmin} | Meu ID: ${client.info.wid._serialized}`);
+        const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+        console.log(`[DEBUG] Admins do grupo:`, adminIds);
+        console.log(`[DEBUG] Meu ID: ${client.info.wid._serialized}`);
+        const botIsAdmin = adminIds.includes(client.info.wid._serialized);
+        console.log(`[DEBUG] Bot é admin? ${botIsAdmin}`);
         if (!botIsAdmin) {
             return; // Apenas ignora, não responde nada
         }
