@@ -70,9 +70,13 @@ if (fs.existsSync('group_settings.json')) {
 // EVENTO: QR Code
 client.on('qr', qr => {
     console.log('🔄 QR Code gerado! Escaneie com seu WhatsApp:');
-    console.log('='.repeat(50));
-    qrcode.generate(qr, { small: false });
-    console.log('='.repeat(50));
+    console.log('='.repeat(30));
+    qrcode.generate(qr, { 
+        small: true,
+        scale: 1,
+        margin: 1
+    });
+    console.log('='.repeat(30));
     console.log('📱 Abra o WhatsApp → Aparelhos conectados → Conectar aparelho');
 });
 
