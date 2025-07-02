@@ -49,7 +49,7 @@ server.listen(PORT, () => {
 
 // Configurações básicas
 const CONFIG = {
-    welcomeMessage: "👋 Olá {user}, seja bem-vindo(a) ao grupo {group}!",
+    welcomeMessage: "🎉 Bem-vindo(a), {user}! Aproveite o grupo {group} e leia as regras fixadas. Qualquer dúvida, chame um admin!",
     deleteConfirmation: false,
     maxReconnectAttempts: Infinity, // reconexão infinita
     reconnectDelay: 5000
