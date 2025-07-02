@@ -766,8 +766,22 @@ client.on('group_join', async (notification) => {
         const chat = await notification.getChat();
         const groupId = chat.id._serialized;
         const groupConfig = groupSettings[groupId] || {};
+        // Só envia se o recurso estiver ativado
         if (groupConfig.welcomeEnabled === false) {
             console.log('[BOAS-VINDAS] Boas-vindas desativadas para este grupo.');
+            return;
+        }
+        // Só envia se o bot estiver ativado no grupo
+        const isBotActive = groupSettings[groupId]?.botActive !== false;
+        if (!isBotActive) {
+            console.log('[BOAS-VINDAS] Bot desativado neste grupo.');
+            return;
+        }
+        // Só envia se o bot for admin
+        const metadata = await client.getChatById(groupId);
+        const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+        if (!adminIds.includes(client.info.wid._serialized)) {
+            console.log('[BOAS-VINDAS] Bot não é admin. Ignorando.');
             return;
         }
         // notification.recipientIds pode conter 1 ou mais membros
