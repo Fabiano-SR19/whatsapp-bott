@@ -22,6 +22,19 @@ const server = http.createServer((req, res) => {
                 res.end(data);
             }
         });
+    } else if (req.url === '/status') {
+        // Endpoint para verificar status do bot
+        const status = {
+            connectionStatus,
+            isReconnecting,
+            reconnectAttempts,
+            lastHeartbeat: new Date(lastHeartbeat).toISOString(),
+            uptime: process.uptime(),
+            timestamp: new Date().toISOString()
+        };
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(status, null, 2));
     } else {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(`
@@ -29,8 +42,11 @@ const server = http.createServer((req, res) => {
                 <head><title>Bot WhatsApp</title></head>
                 <body style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
                     <h1>🤖 Bot WhatsApp Online!</h1>
-                    <p>Status: Aguardando conexão</p>
+                    <p>Status: ${connectionStatus}</p>
+                    <p>Reconectando: ${isReconnecting ? 'Sim' : 'Não'}</p>
+                    <p>Tentativas de reconexão: ${reconnectAttempts}</p>
                     <p><a href="/qr" style="background: #25D366; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">📱 Baixar QR Code</a></p>
+                    <p><a href="/status" style="background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">📊 Status JSON</a></p>
                     <p>Ou acesse diretamente: <a href="/qr">${req.headers.host}/qr</a></p>
                     <p><small>Se não funcionar, aguarde alguns segundos e tente novamente.</small></p>
                 </body>
@@ -100,10 +116,98 @@ if (fs.existsSync('group_settings.json')) {
     }
 }
 
-// EVENTO: QR Code
+// Sistema de reconexão automática melhorado
+let reconnectAttempts = 0;
+let isReconnecting = false;
+let lastHeartbeat = Date.now();
+let connectionStatus = 'disconnected';
+
+client.on('disconnected', async (reason) => {
+    console.log(`❌ Conexão perdida (${reason}), tentando reconectar...`);
+    connectionStatus = 'disconnected';
+    reconnectAttempts++;
+    isReconnecting = true;
+    
+    // Aguarda um pouco antes de tentar reconectar
+    await new Promise(resolve => setTimeout(resolve, CONFIG.reconnectDelay));
+    
+    try {
+        console.log(`🔄 Tentativa de reconexão ${reconnectAttempts}...`);
+        await client.initialize();
+        reconnectAttempts = 0;
+        isReconnecting = false;
+        connectionStatus = 'connected';
+        console.log('✅ Reconexão bem-sucedida!');
+    } catch (err) {
+        console.error(`❌ Tentativa ${reconnectAttempts} falhou:`, err);
+        isReconnecting = false;
+        // Não encerra o processo, tenta de novo na próxima desconexão
+    }
+});
+
+// Heartbeat melhorado para checar sessão a cada 30 segundos
+setInterval(async () => {
+    if (isReconnecting) {
+        console.log('[HEARTBEAT] Reconexão em andamento, pulando verificação...');
+        return;
+    }
+    
+    try {
+        const now = Date.now();
+        const timeSinceLastHeartbeat = now - lastHeartbeat;
+        
+        // Verifica se o cliente está realmente conectado
+        if (!client.info || !client.info.wid) {
+            console.warn('[HEARTBEAT] Sessão não ativa, tentando reconectar...');
+            connectionStatus = 'reconnecting';
+            isReconnecting = true;
+            await client.initialize();
+            isReconnecting = false;
+            connectionStatus = 'connected';
+            console.log('[HEARTBEAT] Reconexão forçada bem-sucedida!');
+        } else {
+            // Testa se consegue fazer uma operação simples
+            try {
+                await client.getChats();
+                connectionStatus = 'connected';
+                lastHeartbeat = now;
+                console.log(`[HEARTBEAT] Sessão ativa (${timeSinceLastHeartbeat}ms desde último check)`);
+            } catch (testError) {
+                console.warn('[HEARTBEAT] Erro ao testar conexão, tentando reconectar...');
+                connectionStatus = 'reconnecting';
+                isReconnecting = true;
+                await client.initialize();
+                isReconnecting = false;
+                connectionStatus = 'connected';
+                console.log('[HEARTBEAT] Reconexão após teste falhou bem-sucedida!');
+            }
+        }
+    } catch (err) {
+        console.error('[HEARTBEAT] Erro ao checar/reconectar sessão:', err);
+        isReconnecting = false;
+        connectionStatus = 'error';
+    }
+}, 30 * 1000); // Verifica a cada 30 segundos
+
+// Adiciona evento de autenticação
+client.on('authenticated', () => {
+    console.log('🔐 Cliente autenticado!');
+    connectionStatus = 'authenticated';
+});
+
+client.on('auth_failure', (msg) => {
+    console.error('❌ Falha na autenticação:', msg);
+    connectionStatus = 'auth_failed';
+});
+
+client.on('loading_screen', (percent, message) => {
+    console.log(`📱 Carregando: ${percent}% - ${message}`);
+});
+
 client.on('qr', async qr => {
     console.log('🔄 QR Code gerado!');
     console.log('📱 Escaneie com WhatsApp → Aparelhos conectados');
+    connectionStatus = 'waiting_qr';
     
     try {
         // Gerar QR Code como imagem PNG
@@ -126,7 +230,48 @@ client.on('qr', async qr => {
     } catch (error) {
         console.error('❌ Erro ao gerar QR Code:', error);
         // Fallback para terminal
-    qrcode.generate(qr, { small: true });
+        qrcode.generate(qr, { small: true });
+    }
+});
+
+// EVENTO: Bot pronto
+client.on('ready', async () => {
+    console.log('✅ Bot conectado e pronto!');
+    connectionStatus = 'ready';
+    lastHeartbeat = Date.now();
+    
+    try {
+        // Carrega cache inicial de membros dos grupos
+        const chats = await client.getChats();
+        const groups = chats.filter(chat => chat.isGroup);
+        for (const group of groups) {
+            try {
+                const metadata = await client.getChatById(group.id._serialized);
+                groupMembersCache.set(
+                    group.id._serialized, 
+                    {
+                        members: new Set(metadata.participants.map(p => p.id._serialized)),
+                        lastUpdate: Date.now()
+                    }
+                );
+                console.log(`[CACHE] Membros carregados para o grupo ${group.name}`);
+            } catch (error) {
+                console.error(`Erro ao carregar metadata do grupo ${group.name}:`, error);
+            }
+        }
+        // Iniciar auto-mensagens para grupos ativados
+        for (const groupId in groupSettings) {
+            if (groupSettings[groupId].autoMessageEnabled) {
+                try {
+                    const chat = await client.getChatById(groupId);
+                    startAutoMessage(groupId, chat);
+                } catch (e) {
+                    console.error('Erro ao iniciar auto-mensagem:', e);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Erro ao inicializar cache de membros:', error);
     }
 });
 
@@ -190,41 +335,6 @@ async function setAutoMessageText(chat, msg) {
     saveGroupSettings();
     await msg.reply('✅ Mensagem automática configurada!');
 }
-
-// EVENTO: Bot pronto
-client.on('ready', async () => {
-    console.log('✅ Bot conectado e pronto!');
-    try {
-        // Carrega cache inicial de membros dos grupos
-        const chats = await client.getChats();
-        const groups = chats.filter(chat => chat.isGroup);
-        for (const group of groups) {
-            try {
-                const metadata = await client.getChatById(group.id._serialized);
-                groupMembersCache.set(
-                    group.id._serialized, 
-                    new Set(metadata.participants.map(p => p.id._serialized))
-                );
-                console.log(`[CACHE] Membros carregados para o grupo ${group.name}`);
-            } catch (error) {
-                console.error(`Erro ao carregar metadata do grupo ${group.name}:`, error);
-            }
-        }
-        // Iniciar auto-mensagens para grupos ativados
-        for (const groupId in groupSettings) {
-            if (groupSettings[groupId].autoMessageEnabled) {
-                try {
-                    const chat = await client.getChatById(groupId);
-                    startAutoMessage(groupId, chat);
-                } catch (e) {
-                    console.error('Erro ao iniciar auto-mensagem:', e);
-                }
-            }
-        }
-    } catch (error) {
-        console.error('Erro ao inicializar cache de membros:', error);
-    }
-});
 
 // Função para obter informações do chat
 async function getChatInfo(msg) {
@@ -290,7 +400,8 @@ async function handleNewMember(msg) {
             return;
         }
         const currentParticipants = new Set(metadata.participants.map(p => p.id._serialized));
-        const cachedMembers = groupMembersCache.get(chat.id._serialized) || new Set();
+        const cachedData = groupMembersCache.get(chat.id._serialized);
+        const cachedMembers = cachedData ? cachedData.members : new Set();
         const newMembers = [...currentParticipants].filter(id => !cachedMembers.has(id));
         if (newMembers.length === 0) {
             console.log('[BOAS-VINDAS] Nenhum novo membro detectado.');
@@ -314,7 +425,10 @@ async function handleNewMember(msg) {
                 });
                 console.log(`[BOAS-VINDAS] Mensagem enviada para @${contact.id.user}`);
                 cachedMembers.add(contact.id._serialized);
-                groupMembersCache.set(groupId, cachedMembers);
+                groupMembersCache.set(groupId, {
+                    members: cachedMembers,
+                    lastUpdate: Date.now()
+                });
             } catch (memberError) {
                 console.error(`Erro com membro ${memberId}:`, memberError);
             }
@@ -423,20 +537,40 @@ async function handleAntiFake(chat) {
 async function handleCommand(msg) {
     let timeout;
     try {
+        console.log(`[COMANDO] Iniciando processamento do comando: ${msg.body}`);
+        
+        // Verifica se o bot está conectado
+        if (connectionStatus !== 'ready' && connectionStatus !== 'connected') {
+            console.log(`[COMANDO] Bot não está pronto (status: ${connectionStatus}), ignorando comando`);
+            return;
+        }
+        
         timeout = setTimeout(async () => {
-            await msg.reply('⌛ O comando demorou muito para responder');
+            console.log('[COMANDO] Timeout atingido, enviando resposta de demora');
+            try {
+                await msg.reply('⌛ O comando demorou muito para responder');
+            } catch (timeoutError) {
+                console.error('[COMANDO] Erro ao enviar resposta de timeout:', timeoutError);
+            }
         }, 15000);
         
         const command = msg.body.toLowerCase().trim().split(' ')[0];
+        console.log(`[COMANDO] Comando identificado: ${command}`);
+        
         const chatInfo = await getChatInfo(msg);
-        if (!chatInfo) return;
+        if (!chatInfo) {
+            console.log('[COMANDO] Não foi possível obter informações do chat');
+            return;
+        }
         
         // Só funciona em grupos
         if (!chatInfo.isGroup) {
+            console.log('[COMANDO] Comando em chat privado, ignorando');
             return; // Ignora comandos em chats privados
         }
         
         const { chat, isGroup, participants } = chatInfo;
+        console.log(`[COMANDO] Processando em grupo: ${chat.name}`);
         
         // Verificar se o bot é admin (sempre buscar metadata mais recente)
         const metadata = await client.getChatById(chat.id._serialized);
@@ -446,19 +580,26 @@ async function handleCommand(msg) {
         const botIsAdmin = adminIds.includes(client.info.wid._serialized);
         console.log(`[DEBUG] Bot é admin? ${botIsAdmin}`);
         if (!botIsAdmin) {
+            console.log('[COMANDO] Bot não é admin, ignorando comando');
             return; // Apenas ignora, não responde nada
         }
         
         // Verificar se é admin para TODOS os comandos
-            const senderIsAdmin = await isUserAdmin(msg, participants);
-            if (!senderIsAdmin) {
-                return msg.reply('❌ Você precisa ser admin para executar este comando!');
-            }
+        const senderIsAdmin = await isUserAdmin(msg, participants);
+        console.log(`[COMANDO] Usuário é admin? ${senderIsAdmin}`);
+        if (!senderIsAdmin) {
+            console.log('[COMANDO] Usuário não é admin, enviando resposta de erro');
+            return msg.reply('❌ Você precisa ser admin para executar este comando!');
+        }
         
         // Verificar se o bot está ativo para TODOS os comandos exceto !ativar
         if (isGroup && command !== '!ativar') {
             const isBotActive = groupSettings[chat.id._serialized]?.botActive !== false;
-            if (!isBotActive) return;
+            console.log(`[COMANDO] Bot ativo no grupo? ${isBotActive}`);
+            if (!isBotActive) {
+                console.log('[COMANDO] Bot não está ativo neste grupo');
+                return;
+            }
         }
         
         switch (command) {
@@ -523,21 +664,34 @@ async function handleCommand(msg) {
             default:
                 return; // Ignora comandos desconhecidos
         }
+        
+        console.log(`[COMANDO] Comando ${command} executado com sucesso`);
     } catch (error) {
-        console.error('Erro ao executar comando:', error);
-        msg.reply('❌ Ocorreu um erro ao executar este comando.');
+        console.error('[COMANDO] Erro ao executar comando:', error);
+        try {
+            await msg.reply('❌ Ocorreu um erro ao executar este comando.');
+        } catch (replyError) {
+            console.error('[COMANDO] Erro ao enviar resposta de erro:', replyError);
+        }
     } finally {
         clearTimeout(timeout);
+        console.log(`[COMANDO] Finalizando processamento do comando: ${msg.body}`);
     }
 }
 
 // EVENTO: Mensagens recebidas
 client.on('message', async msg => {
     try {
-        console.log(`📨 Mensagem recebida: "${msg.body}" de ${msg.author || msg.from}`);
+        console.log(`📨 Mensagem recebida: "${msg.body}" de ${msg.author || msg.from} (Status: ${connectionStatus})`);
         
         if (msg.fromMe) {
             console.log('❌ Mensagem minha, ignorando');
+            return;
+        }
+        
+        // Verifica se o bot está conectado antes de processar
+        if (connectionStatus !== 'ready' && connectionStatus !== 'connected') {
+            console.log(`⚠️ Bot não está pronto (status: ${connectionStatus}), ignorando mensagem`);
             return;
         }
         
@@ -566,11 +720,17 @@ async function checkBotStatus(chat, msg) {
     try {
         const isActive = groupSettings[chat.id._serialized]?.botActive !== false;
         const welcomeEnabled = groupSettings[chat.id._serialized]?.welcomeEnabled !== false;
+        const cachedData = groupMembersCache.get(chat.id._serialized);
+        const cacheSize = cachedData ? cachedData.members.size : 0;
+        const cacheAge = cachedData ? Math.floor((Date.now() - cachedData.lastUpdate) / 1000) : 0;
+        
         await msg.reply(
             `ℹ️ *Status do bot*:\n` +
             `- *Ativo*: ${isActive ? '✅ SIM' : '❌ NÃO'}\n` +
             `- *Boas-vindas*: ${welcomeEnabled ? '✅ LIGADO' : '❌ DESLIGADO'}\n` +
-            `- *Membros no cache*: ${groupMembersCache.get(chat.id._serialized)?.size || 0}`
+            `- *Membros no cache*: ${cacheSize}\n` +
+            `- *Idade do cache*: ${cacheAge}s\n` +
+            `- *Status da conexão*: ${connectionStatus}`
         );
     } catch (error) {
         console.error('Erro ao verificar status:', error);
@@ -763,7 +923,10 @@ async function toggleWelcome(chat, msg) {
             const metadata = await client.getChatById(chat.id._serialized);
             groupMembersCache.set(
                 chat.id._serialized, 
-                new Set(metadata.participants.map(p => p.id._serialized))
+                {
+                    members: new Set(metadata.participants.map(p => p.id._serialized)),
+                    lastUpdate: Date.now()
+                }
             );
             console.log(`[CACHE] Cache de membros atualizado para ${chat.name}`);
         }
@@ -782,44 +945,6 @@ function saveGroupSettings() {
     }
 }
 
-// Sistema de reconexão automática
-let reconnectAttempts = 0;
-let isReconnecting = false;
-
-client.on('disconnected', async (reason) => {
-    console.log(`❌ Conexão perdida (${reason}), tentando reconectar...`);
-        reconnectAttempts++;
-    isReconnecting = true;
-        await new Promise(resolve => setTimeout(resolve, CONFIG.reconnectDelay));
-        try {
-            await client.initialize();
-            reconnectAttempts = 0;
-        isReconnecting = false;
-            console.log('✅ Reconexão bem-sucedida!');
-        } catch (err) {
-            console.error(`Tentativa ${reconnectAttempts} falhou:`, err);
-        // Não encerra o processo, tenta de novo na próxima desconexão
-        }
-});
-
-// Heartbeat para checar sessão a cada 1 minuto
-setInterval(async () => {
-    if (isReconnecting) return;
-    try {
-        if (!client.info || !client.info.wid) {
-            console.warn('[HEARTBEAT] Sessão não ativa, tentando reconectar...');
-            isReconnecting = true;
-            await client.initialize();
-            isReconnecting = false;
-            console.log('[HEARTBEAT] Reconexão forçada bem-sucedida!');
-        }
-        // Removido o log de sessão ativa para reduzir spam
-    } catch (err) {
-        console.error('[HEARTBEAT] Erro ao checar/reconectar sessão:', err);
-        isReconnecting = false;
-    }
-}, 60 * 1000);
-
 // Inicializa o bot
 client.initialize().catch(error => {
     console.error('Erro ao inicializar o bot:', error);
@@ -828,12 +953,35 @@ client.initialize().catch(error => {
 
 // Tratamento de erros globais
 process.on('unhandledRejection', error => {
-    console.error('Erro não tratado:', error);
+    console.error('❌ Erro não tratado (Promise):', error);
 });
 
 process.on('uncaughtException', error => {
-    console.error('Exceção não capturada:', error);
+    console.error('❌ Exceção não capturada:', error);
+    // Não encerra o processo, apenas loga o erro
 });
+
+// Limpeza de memória a cada 5 minutos
+setInterval(() => {
+    try {
+        // Força garbage collection se disponível
+        if (global.gc) {
+            global.gc();
+            console.log('[MEMORY] Garbage collection executada');
+        }
+        
+        // Limpa cache de membros antigo (mais de 1 hora)
+        const oneHourAgo = Date.now() - (60 * 60 * 1000);
+        for (const [groupId, cache] of groupMembersCache.entries()) {
+            if (cache.lastUpdate && cache.lastUpdate < oneHourAgo) {
+                groupMembersCache.delete(groupId);
+                console.log(`[MEMORY] Cache limpo para grupo ${groupId}`);
+            }
+        }
+    } catch (error) {
+        console.error('[MEMORY] Erro na limpeza de memória:', error);
+    }
+}, 5 * 60 * 1000); // 5 minutos
 
 // Adicionar evento nativo para detectar novos participantes
 client.on('group_join', async (notification) => {
