@@ -768,7 +768,7 @@ client.on('group_join', async (notification) => {
                     .replace('{user}', `@${contact.id.user}`)
                     .replace('{group}', chat.name);
                 await chat.sendMessage(welcomeText, {
-                    mentions: [contact]
+                    mentions: [contact.id._serialized]
                 });
                 console.log(`[BOAS-VINDAS] Mensagem enviada para @${contact.id.user} via evento nativo`);
             } catch (memberError) {
