@@ -51,7 +51,7 @@ server.listen(PORT, () => {
 const CONFIG = {
     welcomeMessage: "👋 Olá {user}, seja bem-vindo(a) ao grupo {group}!",
     deleteConfirmation: false,
-    maxReconnectAttempts: 5,
+    maxReconnectAttempts: Infinity, // reconexão infinita
     reconnectDelay: 5000
 };
 
@@ -717,19 +717,15 @@ let reconnectAttempts = 0;
 
 client.on('disconnected', async (reason) => {
     console.log(`❌ Conexão perdida (${reason}), tentando reconectar...`);
-    if (reconnectAttempts < CONFIG.maxReconnectAttempts) {
-        reconnectAttempts++;
-        await new Promise(resolve => setTimeout(resolve, CONFIG.reconnectDelay));
-        try {
-            await client.initialize();
-            reconnectAttempts = 0;
-            console.log('✅ Reconexão bem-sucedida!');
-        } catch (err) {
-            console.error(`Tentativa ${reconnectAttempts} falhou:`, err);
-        }
-    } else {
-        console.error('❌ Máximo de tentativas de reconexão atingido');
-        process.exit(1);
+    reconnectAttempts++;
+    await new Promise(resolve => setTimeout(resolve, CONFIG.reconnectDelay));
+    try {
+        await client.initialize();
+        reconnectAttempts = 0;
+        console.log('✅ Reconexão bem-sucedida!');
+    } catch (err) {
+        console.error(`Tentativa ${reconnectAttempts} falhou:`, err);
+        // Não encerra o processo, tenta de novo na próxima desconexão
     }
 });
 
