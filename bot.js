@@ -433,6 +433,15 @@ async function handleCommand(msg) {
         
         const { chat, isGroup, participants } = chatInfo;
         
+        // Verificar se o bot é admin
+        const metadata = await client.getChatById(chat.id._serialized);
+        const botIsAdmin = metadata.participants.find(
+            p => p.id._serialized === client.info.wid._serialized && (p.isAdmin || p.isSuperAdmin)
+        );
+        if (!botIsAdmin) {
+            return msg.reply('❌ O bot precisa ser admin para executar comandos!');
+        }
+        
         // Verificar se é admin para TODOS os comandos
         const senderIsAdmin = await isUserAdmin(msg, participants);
         if (!senderIsAdmin) {
