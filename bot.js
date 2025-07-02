@@ -183,38 +183,13 @@ setInterval(async () => {
                 connectionStatus = 'error';
             }
         } else {
-            // Testa se consegue fazer uma operação simples (com timeout)
-            try {
-                const timeoutPromise = new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Timeout')), 10000)
-                );
-                const testPromise = client.getChats();
-                
-                await Promise.race([testPromise, timeoutPromise]);
-                
-                // Se chegou até aqui, a conexão está funcionando
-                if (connectionStatus === 'reconnecting') {
-                    console.log('[HEARTBEAT] Status corrigido: estava reconectando mas conexão está OK');
-                }
-                connectionStatus = 'connected';
-                lastHeartbeat = now;
-                console.log(`[HEARTBEAT] Sessão ativa (${timeSinceLastHeartbeat}ms desde último check)`);
-            } catch (testError) {
-                console.warn('[HEARTBEAT] Erro ao testar conexão, tentando reconectar...');
-                connectionStatus = 'reconnecting';
-                isReconnecting = true;
-                reconnectStartTime = Date.now();
-                try {
-                    await client.initialize();
-                    isReconnecting = false;
-                    connectionStatus = 'connected';
-                    console.log('[HEARTBEAT] Reconexão após teste falhou bem-sucedida!');
-                } catch (reconnectError) {
-                    console.error('[HEARTBEAT] Erro na reconexão após teste:', reconnectError);
-                    isReconnecting = false;
-                    connectionStatus = 'error';
-                }
+            // Se o cliente tem info, assume que está conectado
+            if (connectionStatus === 'reconnecting') {
+                console.log('[HEARTBEAT] Status corrigido: estava reconectando mas cliente está OK');
             }
+            connectionStatus = 'connected';
+            lastHeartbeat = now;
+            console.log(`[HEARTBEAT] Sessão ativa (${timeSinceLastHeartbeat}ms desde último check)`);
         }
     } catch (err) {
         console.error('[HEARTBEAT] Erro ao checar/reconectar sessão:', err);
