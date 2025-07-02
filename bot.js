@@ -439,9 +439,8 @@ async function handleCommand(msg) {
             return msg.reply('❌ Você precisa ser admin para executar este comando!');
         }
         
-        // Verificar se o bot está ativo (exceto para comandos de ativação)
-        const allowedWhenDisabled = ['!ativar', '!ajuda', '!status'];
-        if (isGroup && !allowedWhenDisabled.includes(command)) {
+        // Verificar se o bot está ativo para TODOS os comandos exceto !ativar
+        if (isGroup && command !== '!ativar') {
             const isBotActive = groupSettings[chat.id._serialized]?.botActive !== false;
             if (!isBotActive) return;
         }
