@@ -438,6 +438,7 @@ async function handleCommand(msg) {
         const botIsAdmin = metadata.participants.find(
             p => p.id._serialized === client.info.wid._serialized && (p.isAdmin || p.isSuperAdmin)
         );
+        console.log(`[DEBUG] Bot é admin? ${!!botIsAdmin} | Meu ID: ${client.info.wid._serialized}`);
         if (!botIsAdmin) {
             return; // Apenas ignora, não responde nada
         }
