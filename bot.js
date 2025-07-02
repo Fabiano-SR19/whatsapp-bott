@@ -511,21 +511,30 @@ async function handleCommand(msg) {
 // EVENTO: Mensagens recebidas
 client.on('message', async msg => {
     try {
-        if (msg.fromMe) return;
+        console.log(`📨 Mensagem recebida: "${msg.body}" de ${msg.author || msg.from}`);
+        
+        if (msg.fromMe) {
+            console.log('❌ Mensagem minha, ignorando');
+            return;
+        }
+        
         if (isNewMemberMessage(msg)) {
             console.log('[EVENTO] Mensagem de novo membro detectada:', msg.body);
             await handleNewMember(msg);
         }
+        
         if (msg.body.startsWith('!')) {
+            console.log('🔧 Comando detectado:', msg.body);
             await handleCommand(msg);
         }
+        
         // Anti-link
         const chatInfo = await getChatInfo(msg);
         if (chatInfo && chatInfo.isGroup) {
             await handleAntiLink(msg, chatInfo.chat, chatInfo.participants);
         }
     } catch (error) {
-        console.error('Erro ao processar mensagem:', error);
+        console.error('❌ Erro ao processar mensagem:', error);
     }
 });
 
