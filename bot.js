@@ -121,12 +121,14 @@ let reconnectAttempts = 0;
 let isReconnecting = false;
 let lastHeartbeat = Date.now();
 let connectionStatus = 'disconnected';
+let reconnectStartTime = 0;
 
 client.on('disconnected', async (reason) => {
     console.log(`❌ Conexão perdida (${reason}), tentando reconectar...`);
     connectionStatus = 'disconnected';
     reconnectAttempts++;
     isReconnecting = true;
+    reconnectStartTime = Date.now();
     
     // Aguarda um pouco antes de tentar reconectar
     await new Promise(resolve => setTimeout(resolve, CONFIG.reconnectDelay));
@@ -147,6 +149,13 @@ client.on('disconnected', async (reason) => {
 
 // Heartbeat melhorado para checar sessão a cada 30 segundos
 setInterval(async () => {
+    // Verifica se está reconectando há muito tempo (mais de 2 minutos)
+    if (isReconnecting && (Date.now() - reconnectStartTime) > 120000) {
+        console.warn('[HEARTBEAT] Reconexão travada há mais de 2 minutos, forçando reset...');
+        isReconnecting = false;
+        connectionStatus = 'error';
+    }
+    
     if (isReconnecting) {
         console.log('[HEARTBEAT] Reconexão em andamento, pulando verificação...');
         return;
@@ -161,14 +170,26 @@ setInterval(async () => {
             console.warn('[HEARTBEAT] Sessão não ativa, tentando reconectar...');
             connectionStatus = 'reconnecting';
             isReconnecting = true;
-            await client.initialize();
-            isReconnecting = false;
-            connectionStatus = 'connected';
-            console.log('[HEARTBEAT] Reconexão forçada bem-sucedida!');
-        } else {
-            // Testa se consegue fazer uma operação simples
+            reconnectStartTime = Date.now();
             try {
-                await client.getChats();
+                await client.initialize();
+                isReconnecting = false;
+                connectionStatus = 'connected';
+                console.log('[HEARTBEAT] Reconexão forçada bem-sucedida!');
+            } catch (reconnectError) {
+                console.error('[HEARTBEAT] Erro na reconexão forçada:', reconnectError);
+                isReconnecting = false;
+                connectionStatus = 'error';
+            }
+        } else {
+            // Testa se consegue fazer uma operação simples (com timeout)
+            try {
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Timeout')), 10000)
+                );
+                const testPromise = client.getChats();
+                
+                await Promise.race([testPromise, timeoutPromise]);
                 connectionStatus = 'connected';
                 lastHeartbeat = now;
                 console.log(`[HEARTBEAT] Sessão ativa (${timeSinceLastHeartbeat}ms desde último check)`);
@@ -176,10 +197,17 @@ setInterval(async () => {
                 console.warn('[HEARTBEAT] Erro ao testar conexão, tentando reconectar...');
                 connectionStatus = 'reconnecting';
                 isReconnecting = true;
-                await client.initialize();
-                isReconnecting = false;
-                connectionStatus = 'connected';
-                console.log('[HEARTBEAT] Reconexão após teste falhou bem-sucedida!');
+                reconnectStartTime = Date.now();
+                try {
+                    await client.initialize();
+                    isReconnecting = false;
+                    connectionStatus = 'connected';
+                    console.log('[HEARTBEAT] Reconexão após teste falhou bem-sucedida!');
+                } catch (reconnectError) {
+                    console.error('[HEARTBEAT] Erro na reconexão após teste:', reconnectError);
+                    isReconnecting = false;
+                    connectionStatus = 'error';
+                }
             }
         }
     } catch (err) {
@@ -187,7 +215,7 @@ setInterval(async () => {
         isReconnecting = false;
         connectionStatus = 'error';
     }
-}, 30 * 1000); // Verifica a cada 30 segundos
+}, 60 * 1000); // Verifica a cada 1 minuto
 
 // Adiciona evento de autenticação
 client.on('authenticated', () => {
@@ -661,6 +689,10 @@ async function handleCommand(msg) {
                 if (!isGroup) return;
                 await promoteUser(chat, msg);
                 break;
+            case '!reconectar':
+                if (!isGroup) return;
+                await forceReconnect(chat, msg);
+                break;
             default:
                 return; // Ignora comandos desconhecidos
         }
@@ -793,6 +825,34 @@ async function banUser(chat, msg) {
     }
 }
 
+// Função para forçar reconexão manual
+async function forceReconnect(chat, msg) {
+    try {
+        console.log('[RECONEXÃO] Reconexão manual solicitada');
+        await msg.reply('🔄 Iniciando reconexão manual...');
+        
+        isReconnecting = true;
+        reconnectStartTime = Date.now();
+        connectionStatus = 'reconnecting';
+        
+        try {
+            await client.initialize();
+            isReconnecting = false;
+            connectionStatus = 'connected';
+            await msg.reply('✅ Reconexão manual bem-sucedida!');
+            console.log('[RECONEXÃO] Reconexão manual concluída com sucesso');
+        } catch (error) {
+            isReconnecting = false;
+            connectionStatus = 'error';
+            await msg.reply('❌ Erro na reconexão manual. Tente novamente.');
+            console.error('[RECONEXÃO] Erro na reconexão manual:', error);
+        }
+    } catch (error) {
+        console.error('[RECONEXÃO] Erro ao processar comando de reconexão:', error);
+        msg.reply('❌ Ocorreu um erro ao executar o comando de reconexão.');
+    }
+}
+
 // Função para promover usuários para admin
 async function promoteUser(chat, msg) {
     try {
@@ -870,7 +930,8 @@ async function showHelp(msg) {
 🔧 *Controle do Bot*:
 ├── !ativar - Ativa o bot no grupo
 ├── !desativar - Desativa o bot no grupo
-└── !status - Mostra status do bot
+├── !status - Mostra status do bot
+└── !reconectar - Força reconexão manual
 
 📌 *Administração* (apenas admins):
 ├── !abrir - Libera o grupo para todos
