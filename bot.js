@@ -439,7 +439,7 @@ async function handleCommand(msg) {
             p => p.id._serialized === client.info.wid._serialized && (p.isAdmin || p.isSuperAdmin)
         );
         if (!botIsAdmin) {
-            return msg.reply('❌ O bot precisa ser admin para executar comandos!');
+            return; // Apenas ignora, não responde nada
         }
         
         // Verificar se é admin para TODOS os comandos
