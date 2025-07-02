@@ -1142,15 +1142,22 @@ async function toggleWelcome(chat, msg) {
         };
         saveGroupSettings();
         if (!current) {
-            const metadata = await client.getChatById(chat.id._serialized);
-            groupMembersCache.set(
-                chat.id._serialized, 
-                {
-                    members: new Set(metadata.participants.map(p => p.id._serialized)),
-                    lastUpdate: Date.now()
+            try {
+                const metadata = await getChatMetadata(chat.id._serialized);
+                if (metadata && metadata.participants) {
+                    groupMembersCache.set(
+                        chat.id._serialized, 
+                        {
+                            members: new Set(metadata.participants.map(p => p.id._serialized)),
+                            lastUpdate: Date.now()
+                        }
+                    );
+                    console.log(`[CACHE] Cache de membros atualizado para ${chat.name || 'Grupo'}`);
                 }
-            );
-            console.log(`[CACHE] Cache de membros atualizado para ${chat.name}`);
+            } catch (metadataError) {
+                console.error('[CACHE] Erro ao atualizar cache de membros:', metadataError.message);
+                // Continua mesmo se não conseguir atualizar o cache
+            }
         }
         await msg.reply(`✅ Boas-vindas ${current ? 'desativadas' : 'ativadas'}!`);
     } catch (error) {
@@ -1269,10 +1276,19 @@ client.on('group_join', async (notification) => {
             return;
         }
         // Só envia se o bot for admin
-        const metadata = await client.getChatById(groupId);
-        const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
-        if (!adminIds.includes(client.info.wid._serialized)) {
-            console.log('[BOAS-VINDAS] Bot não é admin. Ignorando.');
+        try {
+            const metadata = await getChatMetadata(groupId);
+            if (!metadata || !metadata.participants) {
+                console.log('[BOAS-VINDAS] Não foi possível obter metadata do grupo.');
+                return;
+            }
+            const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+            if (!adminIds.includes(client.info.wid._serialized)) {
+                console.log('[BOAS-VINDAS] Bot não é admin. Ignorando.');
+                return;
+            }
+        } catch (metadataError) {
+            console.error('[BOAS-VINDAS] Erro ao verificar admin:', metadataError.message);
             return;
         }
         // notification.recipientIds pode conter 1 ou mais membros
@@ -1283,9 +1299,22 @@ client.on('group_join', async (notification) => {
                 const welcomeText = CONFIG.welcomeMessage
                     .replace('{user}', `@${contact.id.user}`)
                     .replace('{group}', chat.name);
-                await chat.sendMessage(welcomeText, {
-                    mentions: [contact.id._serialized]
-                });
+                
+                // Obtém o chat real para enviar mensagem
+                const realChat = await client.getChatById(chat.id._serialized);
+                if (realChat && typeof realChat.sendMessage === 'function') {
+                    await realChat.sendMessage(welcomeText, {
+                        mentions: [contact.id._serialized]
+                    });
+                } else {
+                    // Método alternativo usando a API do WhatsApp diretamente
+                    await client.pupPage.evaluate((chatId, welcomeText, contactId) => {
+                        return window.Store.Chat.get(chatId).then(chat => {
+                            return chat.sendMessage(welcomeText, { mentions: [contactId] });
+                        });
+                    }, chat.id._serialized, welcomeText, contact.id._serialized);
+                }
+                
                 console.log(`[BOAS-VINDAS] Mensagem enviada para @${contact.id.user} via evento nativo`);
             } catch (memberError) {
                 console.error(`[BOAS-VINDAS] Erro ao enviar mensagem para membro ${memberId}:`, memberError);
