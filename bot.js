@@ -1,17 +1,42 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const qrcodeImage = require('qrcode');
 const fs = require('fs');
 const http = require('http');
 
 // Servidor HTTP simples para health check do Railway
 const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bot WhatsApp Online!');
+    if (req.url === '/qr') {
+        // Servir QR Code como imagem
+        fs.readFile('./qrcode.png', (err, data) => {
+            if (err) {
+                res.writeHead(404, { 'Content-Type': 'text/plain' });
+                res.end('QR Code não encontrado');
+            } else {
+                res.writeHead(200, { 'Content-Type': 'image/png' });
+                res.end(data);
+            }
+        });
+    } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`
+            <html>
+                <head><title>Bot WhatsApp</title></head>
+                <body>
+                    <h1>🤖 Bot WhatsApp Online!</h1>
+                    <p>Status: Aguardando conexão</p>
+                    <p><a href="/qr">📱 Baixar QR Code</a></p>
+                    <p>Ou acesse: <a href="/qr" target="_blank">${req.headers.host}/qr</a></p>
+                </body>
+            </html>
+        `);
+    }
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
+    console.log(`📱 QR Code disponível em: http://localhost:${PORT}/qr`);
 });
 
 // Configurações básicas
@@ -68,17 +93,33 @@ if (fs.existsSync('group_settings.json')) {
 }
 
 // EVENTO: QR Code
-client.on('qr', qr => {
+client.on('qr', async qr => {
     console.log('🔄 QR Code gerado!');
     console.log('📱 Escaneie com WhatsApp → Aparelhos conectados');
-    console.log('');
-    qrcode.generate(qr, { 
-        small: true,
-        scale: 0.5,
-        margin: 0
-    });
-    console.log('');
-    console.log('✅ QR Code pronto para escaneamento');
+    
+    try {
+        // Gerar QR Code como imagem PNG
+        await qrcodeImage.toFile('./qrcode.png', qr, {
+            width: 300,
+            margin: 2,
+            color: {
+                dark: '#000000',
+                light: '#FFFFFF'
+            }
+        });
+        
+        console.log('✅ QR Code salvo como imagem!');
+        console.log('📱 Acesse a URL do Railway + /qr para baixar');
+        console.log('🔗 Exemplo: https://seu-bot.railway.app/qr');
+        
+        // Também mostrar no terminal (menor)
+        qrcode.generate(qr, { small: true });
+        
+    } catch (error) {
+        console.error('❌ Erro ao gerar QR Code:', error);
+        // Fallback para terminal
+        qrcode.generate(qr, { small: true });
+    }
 });
 
 // --- Mensagem automática a cada 1h ---
