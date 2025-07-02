@@ -759,14 +759,22 @@ client.on('group_join', async (notification) => {
             console.log('[BOAS-VINDAS] Boas-vindas desativadas para este grupo.');
             return;
         }
-        const contact = await notification.getContact();
-        const welcomeText = CONFIG.welcomeMessage
-            .replace('{user}', `@${contact.id.user}`)
-            .replace('{group}', chat.name);
-        await chat.sendMessage(welcomeText, {
-            mentions: [contact]
-        });
-        console.log(`[BOAS-VINDAS] Mensagem enviada para @${contact.id.user} via evento nativo`);
+        // notification.recipientIds pode conter 1 ou mais membros
+        const recipientIds = notification.recipientIds || [];
+        for (const memberId of recipientIds) {
+            try {
+                const contact = await client.getContactById(memberId);
+                const welcomeText = CONFIG.welcomeMessage
+                    .replace('{user}', `@${contact.id.user}`)
+                    .replace('{group}', chat.name);
+                await chat.sendMessage(welcomeText, {
+                    mentions: [contact]
+                });
+                console.log(`[BOAS-VINDAS] Mensagem enviada para @${contact.id.user} via evento nativo`);
+            } catch (memberError) {
+                console.error(`[BOAS-VINDAS] Erro ao enviar mensagem para membro ${memberId}:`, memberError);
+            }
+        }
     } catch (error) {
         console.error('[BOAS-VINDAS] Erro ao enviar mensagem de boas-vindas via evento nativo:', error);
     }
