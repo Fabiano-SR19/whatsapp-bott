@@ -748,3 +748,26 @@ process.on('unhandledRejection', error => {
 process.on('uncaughtException', error => {
     console.error('Exceção não capturada:', error);
 });
+
+// Adicionar evento nativo para detectar novos participantes
+client.on('group_join', async (notification) => {
+    try {
+        const chat = await notification.getChat();
+        const groupId = chat.id._serialized;
+        const groupConfig = groupSettings[groupId] || {};
+        if (groupConfig.welcomeEnabled === false) {
+            console.log('[BOAS-VINDAS] Boas-vindas desativadas para este grupo.');
+            return;
+        }
+        const contact = await notification.getContact();
+        const welcomeText = CONFIG.welcomeMessage
+            .replace('{user}', `@${contact.id.user}`)
+            .replace('{group}', chat.name);
+        await chat.sendMessage(welcomeText, {
+            mentions: [contact]
+        });
+        console.log(`[BOAS-VINDAS] Mensagem enviada para @${contact.id.user} via evento nativo`);
+    } catch (error) {
+        console.error('[BOAS-VINDAS] Erro ao enviar mensagem de boas-vindas via evento nativo:', error);
+    }
+});
