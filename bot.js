@@ -196,7 +196,7 @@ setInterval(async () => {
         isReconnecting = false;
         connectionStatus = 'error';
     }
-}, 60 * 1000); // Verifica a cada 1 minuto
+}, 2 * 60 * 1000); // Verifica a cada 2 minutos
 
 // Adiciona evento de autenticação
 client.on('authenticated', () => {
