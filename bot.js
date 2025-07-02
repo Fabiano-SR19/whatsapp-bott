@@ -901,14 +901,37 @@ async function mentionAll(chat, msg, participants) {
         if (mentions.length === 0) {
             return msg.reply('❌ Não há participantes para mencionar!');
         }
-        await chat.sendMessage(quotedMsg.body, {
-            mentions: mentions
-        });
-        await msg.delete();
-        await quotedMsg.delete();
-        await chat.sendMessage(`✅ ${mentions.length} membros foram notificados discretamente`, {
-            sendSeen: true
-        });
+        
+        // Obtém o chat real usando o ID
+        const realChat = await client.getChatById(chat.id._serialized);
+        
+        if (realChat && typeof realChat.sendMessage === 'function') {
+            await realChat.sendMessage(quotedMsg.body, {
+                mentions: mentions
+            });
+            await msg.delete();
+            await quotedMsg.delete();
+            await realChat.sendMessage(`✅ ${mentions.length} membros foram notificados discretamente`, {
+                sendSeen: true
+            });
+        } else {
+            // Método alternativo usando a API do WhatsApp diretamente
+            const chatId = chat.id._serialized;
+            await client.pupPage.evaluate((chatId, messageBody, mentions) => {
+                return window.Store.Chat.get(chatId).then(chat => {
+                    return chat.sendMessage(messageBody, { mentions: mentions });
+                });
+            }, chatId, quotedMsg.body, mentions);
+            
+            await msg.delete();
+            await quotedMsg.delete();
+            
+            await client.pupPage.evaluate((chatId, count) => {
+                return window.Store.Chat.get(chatId).then(chat => {
+                    return chat.sendMessage(`✅ ${count} membros foram notificados discretamente`, { sendSeen: true });
+                });
+            }, chatId, mentions.length);
+        }
     } catch (error) {
         console.error('Erro ao mencionar todos:', error);
         msg.reply('❌ Ocorreu um erro ao mencionar os membros.');
@@ -935,7 +958,22 @@ async function banUser(chat, msg) {
         if (userToBan === me.id._serialized) {
             return msg.reply('❌ Você não pode banir o bot!');
         }
-        await chat.removeParticipants([userToBan]);
+        
+        // Obtém o chat real usando o ID
+        const realChat = await client.getChatById(chat.id._serialized);
+        
+        if (realChat && typeof realChat.removeParticipants === 'function') {
+            await realChat.removeParticipants([userToBan]);
+        } else {
+            // Método alternativo usando a API do WhatsApp diretamente
+            const chatId = chat.id._serialized;
+            await client.pupPage.evaluate((chatId, userToBan) => {
+                return window.Store.Chat.get(chatId).then(chat => {
+                    return chat.removeParticipants([userToBan]);
+                });
+            }, chatId, userToBan);
+        }
+        
         await msg.reply('✅ Usuário banido com sucesso!');
     } catch (error) {
         console.error('Erro ao banir usuário:', error);
@@ -980,7 +1018,21 @@ async function promoteUser(chat, msg) {
         
         // Promover o usuário
         const contact = await client.getContactById(userToPromote);
-        await chat.promoteParticipants([contact]);
+        
+        // Obtém o chat real usando o ID
+        const realChat = await client.getChatById(chat.id._serialized);
+        
+        if (realChat && typeof realChat.promoteParticipants === 'function') {
+            await realChat.promoteParticipants([contact]);
+        } else {
+            // Método alternativo usando a API do WhatsApp diretamente
+            const chatId = chat.id._serialized;
+            await client.pupPage.evaluate((chatId, contact) => {
+                return window.Store.Chat.get(chatId).then(chat => {
+                    return chat.promoteParticipants([contact]);
+                });
+            }, chatId, contact);
+        }
         
         await msg.reply(`✅ @${contact.id.user} foi promovido para administrador!`, {
             mentions: [contact.id._serialized]
