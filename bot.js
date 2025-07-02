@@ -6,13 +6,18 @@ const http = require('http');
 
 // Servidor HTTP simples para health check do Railway
 const server = http.createServer((req, res) => {
+    console.log(`📡 Requisição recebida: ${req.method} ${req.url}`);
+    
     if (req.url === '/qr') {
+        console.log('📱 Tentando servir QR Code...');
         // Servir QR Code como imagem
         fs.readFile('./qrcode.png', (err, data) => {
             if (err) {
+                console.log('❌ QR Code não encontrado:', err.message);
                 res.writeHead(404, { 'Content-Type': 'text/plain' });
-                res.end('QR Code não encontrado');
+                res.end('QR Code não encontrado. Aguarde o bot gerar um novo.');
             } else {
+                console.log('✅ QR Code enviado com sucesso!');
                 res.writeHead(200, { 'Content-Type': 'image/png' });
                 res.end(data);
             }
@@ -22,11 +27,12 @@ const server = http.createServer((req, res) => {
         res.end(`
             <html>
                 <head><title>Bot WhatsApp</title></head>
-                <body>
+                <body style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
                     <h1>🤖 Bot WhatsApp Online!</h1>
                     <p>Status: Aguardando conexão</p>
-                    <p><a href="/qr">📱 Baixar QR Code</a></p>
-                    <p>Ou acesse: <a href="/qr" target="_blank">${req.headers.host}/qr</a></p>
+                    <p><a href="/qr" style="background: #25D366; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">📱 Baixar QR Code</a></p>
+                    <p>Ou acesse diretamente: <a href="/qr">${req.headers.host}/qr</a></p>
+                    <p><small>Se não funcionar, aguarde alguns segundos e tente novamente.</small></p>
                 </body>
             </html>
         `);
