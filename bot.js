@@ -42,7 +42,9 @@ const server = http.createServer((req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
-    console.log(`📱 QR Code disponível em: http://localhost:${PORT}/qr`);
+    console.log(`🌐 URL interna: http://localhost:${PORT}`);
+    console.log(`📱 QR Code interno: http://localhost:${PORT}/qr`);
+    console.log(`🔗 Aguarde o Railway gerar a URL pública...`);
 });
 
 // Configurações básicas
