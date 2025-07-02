@@ -149,9 +149,9 @@ client.on('disconnected', async (reason) => {
 
 // Heartbeat melhorado para checar sessão a cada 30 segundos
 setInterval(async () => {
-    // Verifica se está reconectando há muito tempo (mais de 2 minutos)
-    if (isReconnecting && (Date.now() - reconnectStartTime) > 120000) {
-        console.warn('[HEARTBEAT] Reconexão travada há mais de 2 minutos, forçando reset...');
+    // Verifica se está reconectando há muito tempo (mais de 1 minuto)
+    if (isReconnecting && (Date.now() - reconnectStartTime) > 60000) {
+        console.warn('[HEARTBEAT] Reconexão travada há mais de 1 minuto, forçando reset...');
         isReconnecting = false;
         connectionStatus = 'error';
     }
@@ -190,6 +190,11 @@ setInterval(async () => {
                 const testPromise = client.getChats();
                 
                 await Promise.race([testPromise, timeoutPromise]);
+                
+                // Se chegou até aqui, a conexão está funcionando
+                if (connectionStatus === 'reconnecting') {
+                    console.log('[HEARTBEAT] Status corrigido: estava reconectando mas conexão está OK');
+                }
                 connectionStatus = 'connected';
                 lastHeartbeat = now;
                 console.log(`[HEARTBEAT] Sessão ativa (${timeSinceLastHeartbeat}ms desde último check)`);
@@ -370,10 +375,18 @@ async function getChatInfo(msg) {
         const chat = await msg.getChat();
         const isGroup = chat.isGroup;
         let participants = [];
+        
         if (isGroup) {
-            const metadata = await client.getChatById(chat.id._serialized);
-            participants = metadata.participants;
+            try {
+                const metadata = await client.getChatById(chat.id._serialized);
+                participants = metadata.participants;
+            } catch (metadataError) {
+                console.error('Erro ao obter metadata do chat:', metadataError);
+                // Se não conseguir obter metadata, continua sem participantes
+                participants = [];
+            }
         }
+        
         return {
             chat,
             isGroup,
@@ -381,17 +394,66 @@ async function getChatInfo(msg) {
         };
     } catch (error) {
         console.error('Erro ao obter info do chat:', error);
+        
+        // Se o erro for relacionado ao chat não encontrado, tenta uma abordagem diferente
+        if (error.message.includes('getChat') || error.message.includes('Cannot read properties')) {
+            console.log('[RECUPERAÇÃO] Tentando recuperar informações do chat...');
+            try {
+                // Tenta obter informações básicas da mensagem
+                const chatId = msg.chat?.id?._serialized || msg.from;
+                if (chatId) {
+                    return {
+                        chat: { id: { _serialized: chatId }, isGroup: chatId.includes('@g.us') },
+                        isGroup: chatId.includes('@g.us'),
+                        participants: []
+                    };
+                }
+            } catch (recoveryError) {
+                console.error('[RECUPERAÇÃO] Erro na recuperação:', recoveryError);
+            }
+        }
+        
         return null;
+    }
+}
+
+// Função para retry de operações
+async function retryOperation(operation, maxRetries = 3, delay = 1000) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await operation();
+        } catch (error) {
+            console.error(`[RETRY] Tentativa ${attempt}/${maxRetries} falhou:`, error.message);
+            if (attempt === maxRetries) {
+                throw error;
+            }
+            await new Promise(resolve => setTimeout(resolve, delay * attempt));
+        }
     }
 }
 
 // Função para verificar se o usuário é admin
 async function isUserAdmin(msg, participants) {
     try {
-        if (!participants || !Array.isArray(participants)) return false;
+        if (!participants || !Array.isArray(participants)) {
+            console.log('[ADMIN] Sem participantes disponíveis, tentando buscar metadata...');
+            try {
+                participants = await retryOperation(async () => {
+                    const chat = await msg.getChat();
+                    const metadata = await client.getChatById(chat.id._serialized);
+                    return metadata.participants;
+                });
+            } catch (metadataError) {
+                console.error('[ADMIN] Erro ao buscar metadata após retry:', metadataError);
+                return false;
+            }
+        }
+        
         const userId = (msg.author || msg.from);
         const admin = participants.find(p => p.id._serialized === userId && (p.isAdmin || p.isSuperAdmin));
-        return !!admin;
+        const isAdmin = !!admin;
+        console.log(`[ADMIN] Usuário ${userId} é admin? ${isAdmin}`);
+        return isAdmin;
     } catch (error) {
         console.error('Erro ao verificar admin:', error);
         return false;
@@ -598,15 +660,23 @@ async function handleCommand(msg) {
         }
         
         const { chat, isGroup, participants } = chatInfo;
-        console.log(`[COMANDO] Processando em grupo: ${chat.name}`);
+        console.log(`[COMANDO] Processando em grupo: ${chat.name || 'Nome não disponível'}`);
         
-        // Verificar se o bot é admin (sempre buscar metadata mais recente)
-        const metadata = await client.getChatById(chat.id._serialized);
-        const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
-        console.log(`[DEBUG] Admins do grupo:`, adminIds);
-        console.log(`[DEBUG] Meu ID: ${client.info.wid._serialized}`);
-        const botIsAdmin = adminIds.includes(client.info.wid._serialized);
-        console.log(`[DEBUG] Bot é admin? ${botIsAdmin}`);
+        // Verificar se o bot é admin (com tratamento de erro)
+        let botIsAdmin = false;
+        try {
+            const metadata = await client.getChatById(chat.id._serialized);
+            const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+            console.log(`[DEBUG] Admins do grupo:`, adminIds);
+            console.log(`[DEBUG] Meu ID: ${client.info.wid._serialized}`);
+            botIsAdmin = adminIds.includes(client.info.wid._serialized);
+            console.log(`[DEBUG] Bot é admin? ${botIsAdmin}`);
+        } catch (metadataError) {
+            console.error('[COMANDO] Erro ao verificar admin:', metadataError);
+            // Se não conseguir verificar admin, assume que não é admin por segurança
+            botIsAdmin = false;
+        }
+        
         if (!botIsAdmin) {
             console.log('[COMANDO] Bot não é admin, ignorando comando');
             return; // Apenas ignora, não responde nada
@@ -689,10 +759,7 @@ async function handleCommand(msg) {
                 if (!isGroup) return;
                 await promoteUser(chat, msg);
                 break;
-            case '!reconectar':
-                if (!isGroup) return;
-                await forceReconnect(chat, msg);
-                break;
+
             default:
                 return; // Ignora comandos desconhecidos
         }
@@ -724,7 +791,24 @@ client.on('message', async msg => {
         // Verifica se o bot está conectado antes de processar
         if (connectionStatus !== 'ready' && connectionStatus !== 'connected') {
             console.log(`⚠️ Bot não está pronto (status: ${connectionStatus}), ignorando mensagem`);
-            return;
+            
+            // Auto-correção rápida para mensagens
+            if (connectionStatus === 'reconnecting' && (Date.now() - reconnectStartTime) > 15000) {
+                console.log('[MENSAGEM] Reconexão travada, forçando verificação de status...');
+                try {
+                    if (client.info && client.info.wid) {
+                        connectionStatus = 'connected';
+                        console.log('[MENSAGEM] Status corrigido para connected');
+                    }
+                } catch (error) {
+                    console.error('[MENSAGEM] Erro ao verificar status:', error);
+                }
+            }
+            
+            // Se ainda não está pronto, ignora a mensagem
+            if (connectionStatus !== 'ready' && connectionStatus !== 'connected') {
+                return;
+            }
         }
         
         if (isNewMemberMessage(msg)) {
@@ -825,33 +909,7 @@ async function banUser(chat, msg) {
     }
 }
 
-// Função para forçar reconexão manual
-async function forceReconnect(chat, msg) {
-    try {
-        console.log('[RECONEXÃO] Reconexão manual solicitada');
-        await msg.reply('🔄 Iniciando reconexão manual...');
-        
-        isReconnecting = true;
-        reconnectStartTime = Date.now();
-        connectionStatus = 'reconnecting';
-        
-        try {
-            await client.initialize();
-            isReconnecting = false;
-            connectionStatus = 'connected';
-            await msg.reply('✅ Reconexão manual bem-sucedida!');
-            console.log('[RECONEXÃO] Reconexão manual concluída com sucesso');
-        } catch (error) {
-            isReconnecting = false;
-            connectionStatus = 'error';
-            await msg.reply('❌ Erro na reconexão manual. Tente novamente.');
-            console.error('[RECONEXÃO] Erro na reconexão manual:', error);
-        }
-    } catch (error) {
-        console.error('[RECONEXÃO] Erro ao processar comando de reconexão:', error);
-        msg.reply('❌ Ocorreu um erro ao executar o comando de reconexão.');
-    }
-}
+
 
 // Função para promover usuários para admin
 async function promoteUser(chat, msg) {
@@ -930,8 +988,7 @@ async function showHelp(msg) {
 🔧 *Controle do Bot*:
 ├── !ativar - Ativa o bot no grupo
 ├── !desativar - Desativa o bot no grupo
-├── !status - Mostra status do bot
-└── !reconectar - Força reconexão manual
+└── !status - Mostra status do bot
 
 📌 *Administração* (apenas admins):
 ├── !abrir - Libera o grupo para todos
@@ -1037,6 +1094,52 @@ setInterval(() => {
             if (cache.lastUpdate && cache.lastUpdate < oneHourAgo) {
                 groupMembersCache.delete(groupId);
                 console.log(`[MEMORY] Cache limpo para grupo ${groupId}`);
+            }
+        }
+        
+        // Auto-correção de status travado
+        if (connectionStatus === 'reconnecting' && (Date.now() - reconnectStartTime) > 30000) {
+            console.warn('[AUTO-CORREÇÃO] Status travado em reconnecting há mais de 30 segundos, forçando correção...');
+            try {
+                if (client.info && client.info.wid) {
+                    connectionStatus = 'connected';
+                    isReconnecting = false;
+                    console.log('[AUTO-CORREÇÃO] Status corrigido para connected');
+                } else {
+                    connectionStatus = 'error';
+                    isReconnecting = false;
+                    console.log('[AUTO-CORREÇÃO] Status corrigido para error');
+                }
+            } catch (error) {
+                console.error('[AUTO-CORREÇÃO] Erro ao corrigir status:', error);
+                connectionStatus = 'error';
+                isReconnecting = false;
+            }
+        }
+        
+        // Auto-correção de status error
+        if (connectionStatus === 'error') {
+            console.warn('[AUTO-CORREÇÃO] Status em error, tentando reconectar...');
+            try {
+                if (client.info && client.info.wid) {
+                    connectionStatus = 'connected';
+                    console.log('[AUTO-CORREÇÃO] Status error corrigido para connected');
+                } else {
+                    // Tenta reinicializar o cliente
+                    isReconnecting = true;
+                    reconnectStartTime = Date.now();
+                    client.initialize().then(() => {
+                        isReconnecting = false;
+                        connectionStatus = 'connected';
+                        console.log('[AUTO-CORREÇÃO] Cliente reinicializado com sucesso');
+                    }).catch((error) => {
+                        console.error('[AUTO-CORREÇÃO] Erro ao reinicializar cliente:', error);
+                        isReconnecting = false;
+                    });
+                }
+            } catch (error) {
+                console.error('[AUTO-CORREÇÃO] Erro ao corrigir status error:', error);
+                isReconnecting = false;
             }
         }
     } catch (error) {
