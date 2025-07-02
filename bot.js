@@ -426,22 +426,26 @@ async function handleCommand(msg) {
         timeout = setTimeout(async () => {
             await msg.reply('⌛ O comando demorou muito para responder');
         }, 15000);
+        
         const command = msg.body.toLowerCase().trim().split(' ')[0];
         const chatInfo = await getChatInfo(msg);
         if (!chatInfo) return;
+        
         const { chat, isGroup, participants } = chatInfo;
-        const noAdminCommands = ['!ajuda', '!status'];
-        if (!noAdminCommands.includes(command)) {
-            const senderIsAdmin = await isUserAdmin(msg, participants);
-            if (!senderIsAdmin) {
-                return msg.reply('❌ Você precisa ser admin para executar este comando!');
-            }
+        
+        // Verificar se é admin para TODOS os comandos
+        const senderIsAdmin = await isUserAdmin(msg, participants);
+        if (!senderIsAdmin) {
+            return msg.reply('❌ Você precisa ser admin para executar este comando!');
         }
-        const allowedWhenDisabled = ['!ativar', '!ajuda', '!antifake', '!antilink', '!autoanuncio', '!setanuncio'];
+        
+        // Verificar se o bot está ativo (exceto para comandos de ativação)
+        const allowedWhenDisabled = ['!ativar', '!ajuda', '!status'];
         if (isGroup && !allowedWhenDisabled.includes(command)) {
             const isBotActive = groupSettings[chat.id._serialized]?.botActive !== false;
             if (!isBotActive) return;
         }
+        
         switch (command) {
             case '!ativar':
                 if (!isGroup) return;
