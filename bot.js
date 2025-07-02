@@ -431,6 +431,11 @@ async function handleCommand(msg) {
         const chatInfo = await getChatInfo(msg);
         if (!chatInfo) return;
         
+        // Só funciona em grupos
+        if (!chatInfo.isGroup) {
+            return; // Ignora comandos em chats privados
+        }
+        
         const { chat, isGroup, participants } = chatInfo;
         
         // Verificar se o bot é admin
