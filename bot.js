@@ -126,7 +126,7 @@ client.on('qr', async qr => {
     } catch (error) {
         console.error('❌ Erro ao gerar QR Code:', error);
         // Fallback para terminal
-        qrcode.generate(qr, { small: true });
+    qrcode.generate(qr, { small: true });
     }
 });
 
@@ -450,10 +450,10 @@ async function handleCommand(msg) {
         }
         
         // Verificar se é admin para TODOS os comandos
-        const senderIsAdmin = await isUserAdmin(msg, participants);
-        if (!senderIsAdmin) {
-            return msg.reply('❌ Você precisa ser admin para executar este comando!');
-        }
+            const senderIsAdmin = await isUserAdmin(msg, participants);
+            if (!senderIsAdmin) {
+                return msg.reply('❌ Você precisa ser admin para executar este comando!');
+            }
         
         // Verificar se o bot está ativo para TODOS os comandos exceto !ativar
         if (isGroup && command !== '!ativar') {
@@ -515,6 +515,10 @@ async function handleCommand(msg) {
             case '!setanuncio':
                 if (!isGroup) return;
                 await setAutoMessageText(chat, msg);
+                break;
+            case '!promover':
+                if (!isGroup) return;
+                await promoteUser(chat, msg);
                 break;
             default:
                 return; // Ignora comandos desconhecidos
@@ -629,6 +633,55 @@ async function banUser(chat, msg) {
     }
 }
 
+// Função para promover usuários para admin
+async function promoteUser(chat, msg) {
+    try {
+        if (!msg.hasQuotedMsg && msg.mentionedIds.length === 0) {
+            return msg.reply('⚠️ Marque o usuário ou responda sua mensagem com *!promover*');
+        }
+        
+        let userToPromote;
+        if (msg.hasQuotedMsg) {
+            const quotedMsg = await msg.getQuotedMessage();
+            userToPromote = quotedMsg.author || quotedMsg.from;
+        } else {
+            userToPromote = msg.mentionedIds[0];
+        }
+        
+        // Verificar se não está tentando promover a si mesmo
+        if (userToPromote === (msg.author || msg.from)) {
+            return msg.reply('❌ Você não pode promover a si mesmo!');
+        }
+        
+        // Verificar se não está tentando promover o bot
+        const me = await client.getContactById(client.info.wid._serialized);
+        if (userToPromote === me.id._serialized) {
+            return msg.reply('❌ Você não pode promover o bot!');
+        }
+        
+        // Verificar se o usuário já é admin
+        const metadata = await client.getChatById(chat.id._serialized);
+        const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+        if (adminIds.includes(userToPromote)) {
+            return msg.reply('❌ Este usuário já é administrador!');
+        }
+        
+        // Promover o usuário
+        const contact = await client.getContactById(userToPromote);
+        await chat.promoteParticipants([contact]);
+        
+        await msg.reply(`✅ @${contact.id.user} foi promovido para administrador!`, {
+            mentions: [contact.id._serialized]
+        });
+        
+        console.log(`[PROMOÇÃO] ${contact.id.user} foi promovido por ${msg.author || msg.from}`);
+        
+    } catch (error) {
+        console.error('Erro ao promover usuário:', error);
+        msg.reply('❌ Ocorreu um erro ao promover o usuário. Verifique se sou admin e tenho permissões.');
+    }
+}
+
 // Função para apagar mensagens
 async function deleteMessage(msg) {
     try {
@@ -663,6 +716,7 @@ async function showHelp(msg) {
 ├── !abrir - Libera o grupo para todos
 ├── !fechar - Restringe para apenas admins
 ├── !banir - Remove usuário do grupo
+├── !promover - Promove usuário para admin
 ├── !cite - Marca todos ocultamente
 ├── !apagar - Apaga mensagem
 ├── !antifake - Ativa/desativa anti-fake
@@ -734,18 +788,18 @@ let isReconnecting = false;
 
 client.on('disconnected', async (reason) => {
     console.log(`❌ Conexão perdida (${reason}), tentando reconectar...`);
-    reconnectAttempts++;
+        reconnectAttempts++;
     isReconnecting = true;
-    await new Promise(resolve => setTimeout(resolve, CONFIG.reconnectDelay));
-    try {
-        await client.initialize();
-        reconnectAttempts = 0;
+        await new Promise(resolve => setTimeout(resolve, CONFIG.reconnectDelay));
+        try {
+            await client.initialize();
+            reconnectAttempts = 0;
         isReconnecting = false;
-        console.log('✅ Reconexão bem-sucedida!');
-    } catch (err) {
-        console.error(`Tentativa ${reconnectAttempts} falhou:`, err);
+            console.log('✅ Reconexão bem-sucedida!');
+        } catch (err) {
+            console.error(`Tentativa ${reconnectAttempts} falhou:`, err);
         // Não encerra o processo, tenta de novo na próxima desconexão
-    }
+        }
 });
 
 // Heartbeat para checar sessão a cada 1 minuto
