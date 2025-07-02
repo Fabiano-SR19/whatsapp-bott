@@ -1050,7 +1050,25 @@ async function showHelp(msg) {
 // Funções auxiliares
 async function setGroupLock(chat, msg, lock) {
     try {
-        await chat.setMessagesAdminsOnly(lock);
+        // Obtém o chat real usando o ID
+        const realChat = await client.getChatById(chat.id._serialized);
+        
+        if (realChat && typeof realChat.setMessagesAdminsOnly === 'function') {
+            await realChat.setMessagesAdminsOnly(lock);
+        } else {
+            // Método alternativo usando a API do WhatsApp diretamente
+            const chatId = chat.id._serialized;
+            await client.pupPage.evaluate((chatId, lock) => {
+                return window.Store.Chat.get(chatId).then(chat => {
+                    if (lock) {
+                        return chat.setMessagesAdminsOnly(true);
+                    } else {
+                        return chat.setMessagesAdminsOnly(false);
+                    }
+                });
+            }, chatId, lock);
+        }
+        
         groupSettings[chat.id._serialized] = {
             ...groupSettings[chat.id._serialized],
             isLocked: lock
