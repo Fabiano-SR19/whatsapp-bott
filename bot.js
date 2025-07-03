@@ -1100,8 +1100,6 @@ async function banUser(chat, msg) {
     }
 }
 
-
-
 // Função para promover usuários para admin
 async function promoteUser(chat, msg) {
     try {
@@ -1443,3 +1441,14 @@ client.on('group_join', async (notification) => {
         console.error('[BOAS-VINDAS] Erro ao enviar mensagem de boas-vindas via evento nativo:', error);
     }
 });
+
+// Reinicializa o cliente WhatsApp a cada 6 horas para evitar travamentos
+setInterval(() => {
+    console.log('[RESTART] Reinicializando cliente WhatsApp para evitar travamentos...');
+    client.destroy().then(() => {
+        client.initialize();
+    }).catch((err) => {
+        console.error('[RESTART] Erro ao reinicializar cliente:', err);
+        process.exit(1); // Força restart do processo se falhar
+    });
+}, 6 * 60 * 60 * 1000); // 6 horas
