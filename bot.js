@@ -124,6 +124,9 @@ let lastHeartbeat = Date.now();
 let connectionStatus = 'disconnected';
 let reconnectStartTime = 0;
 
+// Variável para registrar o timestamp da última mensagem recebida
+let lastMessageTimestamp = Date.now();
+
 client.on('disconnected', async (reason) => {
     console.log(`❌ Conexão perdida (${reason}), tentando reconectar...`);
     connectionStatus = 'disconnected';
@@ -195,6 +198,28 @@ setInterval(async () => {
         console.error('[HEARTBEAT] Erro ao checar/reconectar sessão:', err);
         isReconnecting = false;
         connectionStatus = 'error';
+    }
+
+    // Heartbeat ativo: tenta buscar chats
+    try {
+        await client.getChats();
+    } catch (err) {
+        console.error('[HEARTBEAT] Falha ao buscar chats, reinicializando cliente...');
+        try {
+            await client.destroy();
+        } catch (e) {}
+        await client.initialize();
+        return;
+    }
+
+    // Se não recebeu mensagem há mais de 10 minutos, reinicia
+    if (Date.now() - lastMessageTimestamp > 10 * 60 * 1000) {
+        console.warn('[HEARTBEAT] Nenhuma mensagem recebida há mais de 10 minutos, reinicializando cliente...');
+        try {
+            await client.destroy();
+        } catch (e) {}
+        await client.initialize();
+        return;
     }
 }, 2 * 60 * 1000); // Verifica a cada 2 minutos
 
@@ -979,6 +1004,9 @@ client.on('message', async msg => {
                 }
             }
         }
+
+        // Atualiza o timestamp da última mensagem recebida
+        lastMessageTimestamp = Date.now();
     } catch (error) {
         console.error('❌ Erro ao processar mensagem:', error);
     }
