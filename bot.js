@@ -1340,11 +1340,19 @@ client.initialize().catch(error => {
 // Tratamento de erros globais
 process.on('unhandledRejection', error => {
     console.error('❌ Erro não tratado (Promise):', error);
+    if (error && error.message && error.message.includes('Session closed')) {
+        console.error('Sessão do Puppeteer fechada! Reiniciando processo...');
+        process.exit(1);
+    }
 });
 
 process.on('uncaughtException', error => {
     console.error('❌ Exceção não capturada:', error);
-    // Não encerra o processo, apenas loga o erro
+    if (error && error.message && error.message.includes('Session closed')) {
+        console.error('Sessão do Puppeteer fechada! Reiniciando processo...');
+        process.exit(1);
+    }
+    // Não encerra o processo para outros erros, apenas loga
 });
 
 // Limpeza de memória a cada 5 minutos
