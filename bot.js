@@ -246,7 +246,7 @@ client.on('qr', async qr => {
 // EVENTO: Bot pronto
 client.on('ready', async () => {
     console.log('✅ Bot conectado e pronto!');
-    connectionStatus = 'ready';
+    connectionStatus = 'connected';
     lastHeartbeat = Date.now();
     
     try {
@@ -426,19 +426,23 @@ async function getChatMetadata(chatId) {
         // Se não está no cache ou expirou, busca do WhatsApp
         if (connectionStatus === 'connected' && client.info && client.info.wid) {
             console.log(`[METADATA] Buscando metadata para ${chatId}...`);
-            const metadata = await client.getChatById(chatId);
-            if (metadata) {
-                console.log(`[METADATA] Metadata obtida com sucesso para ${chatId}`);
-                chatMetadataCache.set(chatId, {
-                    data: metadata,
-                    timestamp: Date.now()
-                });
-                return metadata;
-            } else {
-                console.log(`[METADATA] Metadata não encontrada para ${chatId}`);
+            try {
+                const metadata = await client.getChatById(chatId);
+                if (metadata && metadata.participants) {
+                    console.log(`[METADATA] Metadata obtida com sucesso para ${chatId}`);
+                    chatMetadataCache.set(chatId, {
+                        data: metadata,
+                        timestamp: Date.now()
+                    });
+                    return metadata;
+                } else {
+                    console.log(`[METADATA] Metadata incompleta para ${chatId}`);
+                }
+            } catch (metadataError) {
+                console.error(`[METADATA] Erro ao buscar metadata para ${chatId}:`, metadataError.message);
             }
         } else {
-            console.log(`[METADATA] Cliente não está pronto para buscar metadata`);
+            console.log(`[METADATA] Cliente não está pronto para buscar metadata (status: ${connectionStatus})`);
         }
         
         return null;
@@ -473,16 +477,24 @@ async function isUserAdmin(msg, participants) {
                 if (connectionStatus === 'connected' && client.info && client.info.wid) {
                     const chatId = msg.chat?.id?._serialized || msg.from;
                     if (chatId && chatId.includes('@g.us')) {
-                        participants = await retryOperation(async () => {
+                        try {
                             const metadata = await client.getChatById(chatId);
-                            return metadata.participants || [];
-                        });
+                            participants = metadata.participants || [];
+                        } catch (directError) {
+                            console.error('[ADMIN] Erro ao buscar metadata diretamente:', directError.message);
+                            return false;
+                        }
                     }
                 }
             } catch (metadataError) {
                 console.error('[ADMIN] Erro ao buscar metadata após retry:', metadataError.message);
                 return false;
             }
+        }
+        
+        if (!participants || !Array.isArray(participants)) {
+            console.log('[ADMIN] Ainda sem participantes após tentativa de busca');
+            return false;
         }
         
         const userId = (msg.author || msg.from);
@@ -666,7 +678,7 @@ async function handleCommand(msg) {
         console.log(`[COMANDO] Iniciando processamento do comando: ${msg.body}`);
         
         // Verifica se o bot está conectado
-        if (connectionStatus !== 'ready' && connectionStatus !== 'connected') {
+        if (connectionStatus !== 'connected') {
             console.log(`[COMANDO] Bot não está pronto (status: ${connectionStatus}), ignorando comando`);
             return;
         }
@@ -734,22 +746,22 @@ async function handleCommand(msg) {
             botIsAdmin = false;
         }
         
-        if (!botIsAdmin) {
+        // Para o comando !ajuda, sempre permite execução
+        if (command === '!ajuda') {
+            console.log('[COMANDO] Permitindo !ajuda mesmo sem verificar admin do bot');
+        } else if (!botIsAdmin) {
             console.log('[COMANDO] Bot não é admin, ignorando comando');
-            // Permite comando de ajuda mesmo sem ser admin
-            if (command === '!ajuda') {
-                console.log('[COMANDO] Permitindo !ajuda mesmo sem ser admin');
-            } else {
-                return; // Apenas ignora, não responde nada
-            }
+            return; // Apenas ignora, não responde nada
         }
         
-        // Verificar se é admin para TODOS os comandos
-        const senderIsAdmin = await isUserAdmin(msg, participants);
-        console.log(`[COMANDO] Usuário é admin? ${senderIsAdmin}`);
-        if (!senderIsAdmin) {
-            console.log('[COMANDO] Usuário não é admin, enviando resposta de erro');
-            return msg.reply('❌ Você precisa ser admin para executar este comando!');
+        // Verificar se é admin para TODOS os comandos exceto !ajuda
+        if (command !== '!ajuda') {
+            const senderIsAdmin = await isUserAdmin(msg, participants);
+            console.log(`[COMANDO] Usuário é admin? ${senderIsAdmin}`);
+            if (!senderIsAdmin) {
+                console.log('[COMANDO] Usuário não é admin, enviando resposta de erro');
+                return msg.reply('❌ Você precisa ser admin para executar este comando!');
+            }
         }
         
         // Verificar se o bot está ativo para TODOS os comandos exceto !ativar
@@ -851,7 +863,7 @@ client.on('message', async msg => {
         }
         
         // Verifica se o bot está conectado antes de processar
-        if (connectionStatus !== 'ready' && connectionStatus !== 'connected') {
+        if (connectionStatus !== 'connected') {
             console.log(`⚠️ Bot não está pronto (status: ${connectionStatus}), ignorando mensagem`);
             
             // Auto-correção rápida para mensagens
