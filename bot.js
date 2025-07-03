@@ -547,6 +547,14 @@ async function handleNewMember(msg) {
         }
         const groupId = chat.id._serialized;
         const groupConfig = groupSettings[groupId] || {};
+        
+        // Verificar se o bot está ativo
+        const isBotActive = groupSettings[groupId]?.botActive !== false;
+        if (!isBotActive) {
+            console.log('[BOAS-VINDAS] Bot não está ativo neste grupo.');
+            return;
+        }
+        
         if (groupConfig.welcomeEnabled === false) {
             console.log('[BOAS-VINDAS] Boas-vindas desativadas para este grupo.');
             return;
@@ -558,9 +566,21 @@ async function handleNewMember(msg) {
                 const welcomeText = CONFIG.welcomeMessage
                     .replace('{user}', `@${contact.id.user}`)
                     .replace('{group}', chat.name);
-                await chat.sendMessage(welcomeText, {
-                    mentions: [contact]
-                });
+                
+                // Obtém o chat real antes de enviar mensagem
+                const realChat = await client.getChatById(chat.id._serialized);
+                if (realChat && typeof realChat.sendMessage === 'function') {
+                    await realChat.sendMessage(welcomeText, {
+                        mentions: [contact.id._serialized]
+                    });
+                } else {
+                    // Método alternativo usando a API do WhatsApp diretamente
+                    await client.pupPage.evaluate((chatId, welcomeText, contactId) => {
+                        return window.Store.Chat.get(chatId).then(chat => {
+                            return chat.sendMessage(welcomeText, { mentions: [contactId] });
+                        });
+                    }, chat.id._serialized, welcomeText, contact.id._serialized);
+                }
                 console.log(`[BOAS-VINDAS] Mensagem enviada para @${contact.id.user}`);
                 cachedMembers.add(contact.id._serialized);
                 groupMembersCache.set(groupId, {
@@ -596,7 +616,18 @@ async function toggleBotActivation(chat, msg, activate) {
         saveGroupSettings();
         await msg.reply(`✅ Bot ${activate ? 'ativado' : 'desativado'} neste grupo!`);
         if (activate) {
-            await chat.sendMessage(`🤖 Bot ativado! Digite *!ajuda* para ver os comandos disponíveis.`);
+            // Obtém o chat real antes de enviar mensagem
+            const realChat = await client.getChatById(chat.id._serialized);
+            if (realChat && typeof realChat.sendMessage === 'function') {
+                await realChat.sendMessage(`🤖 Bot ativado! Digite *!ajuda* para ver os comandos disponíveis.`);
+            } else {
+                // Método alternativo usando a API do WhatsApp diretamente
+                await client.pupPage.evaluate((chatId) => {
+                    return window.Store.Chat.get(chatId).then(chat => {
+                        return chat.sendMessage(`🤖 Bot ativado! Digite *!ajuda* para ver os comandos disponíveis.`);
+                    });
+                }, chat.id._serialized);
+            }
         }
     } catch (error) {
         console.error('Erro ao alternar ativação do bot:', error);
@@ -646,7 +677,19 @@ async function handleAntiLink(msg, chat, participants) {
     if (linkRegex.test(msg.body) && !isAdmin) {
         try {
             await msg.delete(true);
-            await chat.sendMessage(`🚫 Mensagem com link apagada!`, { mentions: [msg.author || msg.from] });
+            
+            // Obtém o chat real antes de enviar mensagem
+            const realChat = await client.getChatById(chat.id._serialized);
+            if (realChat && typeof realChat.sendMessage === 'function') {
+                await realChat.sendMessage(`🚫 Mensagem com link apagada!`, { mentions: [msg.author || msg.from] });
+            } else {
+                // Método alternativo usando a API do WhatsApp diretamente
+                await client.pupPage.evaluate((chatId, authorId) => {
+                    return window.Store.Chat.get(chatId).then(chat => {
+                        return chat.sendMessage(`🚫 Mensagem com link apagada!`, { mentions: [authorId] });
+                    });
+                }, chat.id._serialized, msg.author || msg.from);
+            }
         } catch (e) {
             console.error('Erro ao apagar mensagem com link:', e);
         }
@@ -658,16 +701,43 @@ async function handleAntiFake(chat) {
     const groupId = chat.id._serialized;
     const config = getGroupConfig(groupId);
     if (!config.antiFake) return;
-    const metadata = await client.getChatById(groupId);
-    for (const participant of metadata.participants) {
-        if (!participant.id.user.startsWith('55')) {
-            try {
-                await chat.removeParticipants([participant.id._serialized]);
-                await chat.sendMessage(`🚫 Usuário removido por não ser do Brasil (+55): @${participant.id.user}`, { mentions: [participant.id._serialized] });
-            } catch (e) {
-                console.error('Erro ao remover estrangeiro:', e);
+    
+    // Verificar se o bot está ativo
+    const isBotActive = groupSettings[groupId]?.botActive !== false;
+    if (!isBotActive) return;
+    
+    // Verificar se o bot é admin
+    try {
+        const metadata = await client.getChatById(groupId);
+        const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+        const botIsAdmin = adminIds.includes(client.info.wid._serialized);
+        
+        if (!botIsAdmin) return;
+        
+        for (const participant of metadata.participants) {
+            if (!participant.id.user.startsWith('55')) {
+                try {
+                    // Obtém o chat real antes de usar métodos
+                    const realChat = await client.getChatById(groupId);
+                    if (realChat && typeof realChat.removeParticipants === 'function') {
+                        await realChat.removeParticipants([participant.id._serialized]);
+                        await realChat.sendMessage(`🚫 Usuário removido por não ser do Brasil (+55): @${participant.id.user}`, { mentions: [participant.id._serialized] });
+                    } else {
+                        // Método alternativo usando a API do WhatsApp diretamente
+                        await client.pupPage.evaluate((chatId, participantId, participantUser) => {
+                            return window.Store.Chat.get(chatId).then(chat => {
+                                chat.removeParticipants([participantId]);
+                                return chat.sendMessage(`🚫 Usuário removido por não ser do Brasil (+55): @${participantUser}`, { mentions: [participantId] });
+                            });
+                        }, groupId, participant.id._serialized, participant.id.user);
+                    }
+                } catch (e) {
+                    console.error('Erro ao remover estrangeiro:', e);
+                }
             }
         }
+    } catch (error) {
+        console.error('[ANTI-FAKE] Erro ao verificar admin para anti-fake:', error.message);
     }
 }
 
@@ -902,10 +972,29 @@ client.on('message', async msg => {
             await handleCommand(msg);
         }
         
-        // Anti-link
+        // Anti-link - só funciona se bot for admin e estiver ativo
         const chatInfo = await getChatInfo(msg);
         if (chatInfo && chatInfo.isGroup) {
-            await handleAntiLink(msg, chatInfo.chat, chatInfo.participants);
+            // Verificar se o bot é admin e está ativo antes de executar anti-link
+            const groupId = chatInfo.chat.id._serialized;
+            const isBotActive = groupSettings[groupId]?.botActive !== false;
+            
+            if (isBotActive) {
+                // Verificar se o bot é admin
+                try {
+                    const metadata = await getChatMetadata(groupId);
+                    if (metadata && metadata.participants) {
+                        const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+                        const botIsAdmin = adminIds.includes(client.info.wid._serialized);
+                        
+                        if (botIsAdmin) {
+                            await handleAntiLink(msg, chatInfo.chat, chatInfo.participants);
+                        }
+                    }
+                } catch (error) {
+                    console.error('[ANTI-LINK] Erro ao verificar admin para anti-link:', error.message);
+                }
+            }
         }
     } catch (error) {
         console.error('❌ Erro ao processar mensagem:', error);
