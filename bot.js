@@ -127,6 +127,29 @@ let reconnectStartTime = 0;
 // Variável para registrar o timestamp da última mensagem recebida
 let lastMessageTimestamp = Date.now();
 
+// Função centralizada para reinicializar o cliente WhatsApp
+let consecutiveReconnectFails = 0;
+async function forceRestartClient(reason) {
+    try {
+        console.warn(`[RESTART] Reinicializando cliente WhatsApp. Motivo: ${reason}`);
+        await client.destroy();
+    } catch (e) {
+        console.error('[RESTART] Erro ao destruir cliente:', e);
+    }
+    try {
+        await client.initialize();
+        consecutiveReconnectFails = 0;
+        console.log('[RESTART] Cliente reinicializado com sucesso!');
+    } catch (err) {
+        consecutiveReconnectFails++;
+        console.error(`[RESTART] Falha ao reinicializar cliente (${consecutiveReconnectFails} tentativas):`, err);
+        if (consecutiveReconnectFails >= 3) {
+            console.error('[RESTART] Muitas falhas consecutivas, reiniciando processo Node.js...');
+            process.exit(1);
+        }
+    }
+}
+
 client.on('disconnected', async (reason) => {
     console.log(`❌ Conexão perdida (${reason}), tentando reconectar...`);
     connectionStatus = 'disconnected';
@@ -158,6 +181,8 @@ setInterval(async () => {
         console.warn('[HEARTBEAT] Reconexão travada há mais de 1 minuto, forçando reset...');
         isReconnecting = false;
         connectionStatus = 'error';
+        await forceRestartClient('Reconexão travada > 1min');
+        return;
     }
     
     if (isReconnecting) {
@@ -175,16 +200,8 @@ setInterval(async () => {
             connectionStatus = 'reconnecting';
             isReconnecting = true;
             reconnectStartTime = Date.now();
-            try {
-                await client.initialize();
-                isReconnecting = false;
-                connectionStatus = 'connected';
-                console.log('[HEARTBEAT] Reconexão forçada bem-sucedida!');
-            } catch (reconnectError) {
-                console.error('[HEARTBEAT] Erro na reconexão forçada:', reconnectError);
-                isReconnecting = false;
-                connectionStatus = 'error';
-            }
+            await forceRestartClient('Sessão não ativa no heartbeat');
+            return;
         } else {
             // Se o cliente tem info, assume que está conectado
             if (connectionStatus === 'reconnecting') {
@@ -198,6 +215,7 @@ setInterval(async () => {
         console.error('[HEARTBEAT] Erro ao checar/reconectar sessão:', err);
         isReconnecting = false;
         connectionStatus = 'error';
+        await forceRestartClient('Erro ao checar/reconectar sessão');
     }
 
     // Heartbeat ativo: tenta buscar chats
@@ -205,20 +223,14 @@ setInterval(async () => {
         await client.getChats();
     } catch (err) {
         console.error('[HEARTBEAT] Falha ao buscar chats, reinicializando cliente...');
-        try {
-            await client.destroy();
-        } catch (e) {}
-        await client.initialize();
+        await forceRestartClient('Falha ao buscar chats no heartbeat');
         return;
     }
 
     // Se não recebeu mensagem há mais de 10 minutos, reinicia
     if (Date.now() - lastMessageTimestamp > 10 * 60 * 1000) {
         console.warn('[HEARTBEAT] Nenhuma mensagem recebida há mais de 10 minutos, reinicializando cliente...');
-        try {
-            await client.destroy();
-        } catch (e) {}
-        await client.initialize();
+        await forceRestartClient('Inatividade de mensagens > 10min');
         return;
     }
 }, 2 * 60 * 1000); // Verifica a cada 2 minutos
@@ -1337,70 +1349,46 @@ process.on('uncaughtException', error => {
 
 // Limpeza de memória a cada 5 minutos
 setInterval(() => {
-    try {
-        // Força garbage collection se disponível
-        if (global.gc) {
-            global.gc();
-            console.log('[MEMORY] Garbage collection executada');
-        }
-        
-        // Limpa cache de membros antigo (mais de 1 hora)
-        const oneHourAgo = Date.now() - (60 * 60 * 1000);
-        for (const [groupId, cache] of groupMembersCache.entries()) {
-            if (cache.lastUpdate && cache.lastUpdate < oneHourAgo) {
-                groupMembersCache.delete(groupId);
-                console.log(`[MEMORY] Cache limpo para grupo ${groupId}`);
+    (async () => {
+        try {
+            // Força garbage collection se disponível
+            if (global.gc) {
+                global.gc();
+                console.log('[MEMORY] Garbage collection executada');
             }
-        }
-        
-        // Auto-correção de status travado
-        if (connectionStatus === 'reconnecting' && (Date.now() - reconnectStartTime) > 30000) {
-            console.warn('[AUTO-CORREÇÃO] Status travado em reconnecting há mais de 30 segundos, forçando correção...');
-            try {
-                if (client.info && client.info.wid) {
-                    connectionStatus = 'connected';
-                    isReconnecting = false;
-                    console.log('[AUTO-CORREÇÃO] Status corrigido para connected');
-                } else {
+            // Limpa cache de membros antigo (mais de 1 hora)
+            const oneHourAgo = Date.now() - (60 * 60 * 1000);
+            for (const [groupId, cache] of groupMembersCache.entries()) {
+                if (cache.lastUpdate && cache.lastUpdate < oneHourAgo) {
+                    groupMembersCache.delete(groupId);
+                    console.log(`[MEMORY] Cache limpo para grupo ${groupId}`);
+                }
+            }
+            // Auto-correção de status travado
+            if (connectionStatus === 'reconnecting' && (Date.now() - reconnectStartTime) > 30000) {
+                console.warn('[AUTO-CORREÇÃO] Status travado em reconnecting há mais de 30 segundos, forçando correção...');
+                try {
+                    await forceRestartClient('Auto-correção: reconnecting > 30s');
+                } catch (error) {
+                    console.error('[AUTO-CORREÇÃO] Erro ao corrigir status:', error);
                     connectionStatus = 'error';
                     isReconnecting = false;
-                    console.log('[AUTO-CORREÇÃO] Status corrigido para error');
                 }
-            } catch (error) {
-                console.error('[AUTO-CORREÇÃO] Erro ao corrigir status:', error);
-                connectionStatus = 'error';
-                isReconnecting = false;
             }
-        }
-        
-        // Auto-correção de status error
-        if (connectionStatus === 'error') {
-            console.warn('[AUTO-CORREÇÃO] Status em error, tentando reconectar...');
-            try {
-                if (client.info && client.info.wid) {
-                    connectionStatus = 'connected';
-                    console.log('[AUTO-CORREÇÃO] Status error corrigido para connected');
-                } else {
-                    // Tenta reinicializar o cliente
-                    isReconnecting = true;
-                    reconnectStartTime = Date.now();
-                    client.initialize().then(() => {
-                        isReconnecting = false;
-                        connectionStatus = 'connected';
-                        console.log('[AUTO-CORREÇÃO] Cliente reinicializado com sucesso');
-                    }).catch((error) => {
-                        console.error('[AUTO-CORREÇÃO] Erro ao reinicializar cliente:', error);
-                        isReconnecting = false;
-                    });
+            // Auto-correção de status error
+            if (connectionStatus === 'error') {
+                console.warn('[AUTO-CORREÇÃO] Status em error, tentando reconectar...');
+                try {
+                    await forceRestartClient('Auto-correção: status error');
+                } catch (error) {
+                    console.error('[AUTO-CORREÇÃO] Erro ao corrigir status error:', error);
+                    isReconnecting = false;
                 }
-            } catch (error) {
-                console.error('[AUTO-CORREÇÃO] Erro ao corrigir status error:', error);
-                isReconnecting = false;
             }
+        } catch (error) {
+            console.error('[MEMORY] Erro na limpeza de memória:', error);
         }
-    } catch (error) {
-        console.error('[MEMORY] Erro na limpeza de memória:', error);
-    }
+    })();
 }, 5 * 60 * 1000); // 5 minutos
 
 // Adicionar evento nativo para detectar novos participantes
