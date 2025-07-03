@@ -419,19 +419,26 @@ async function getChatMetadata(chatId) {
         // Verifica cache primeiro
         const cached = chatMetadataCache.get(chatId);
         if (cached && (Date.now() - cached.timestamp) < 30000) { // Cache válido por 30 segundos
+            console.log(`[METADATA] Usando cache para ${chatId}`);
             return cached.data;
         }
         
         // Se não está no cache ou expirou, busca do WhatsApp
         if (connectionStatus === 'connected' && client.info && client.info.wid) {
+            console.log(`[METADATA] Buscando metadata para ${chatId}...`);
             const metadata = await client.getChatById(chatId);
             if (metadata) {
+                console.log(`[METADATA] Metadata obtida com sucesso para ${chatId}`);
                 chatMetadataCache.set(chatId, {
                     data: metadata,
                     timestamp: Date.now()
                 });
                 return metadata;
+            } else {
+                console.log(`[METADATA] Metadata não encontrada para ${chatId}`);
             }
+        } else {
+            console.log(`[METADATA] Cliente não está pronto para buscar metadata`);
         }
         
         return null;
@@ -697,12 +704,28 @@ async function handleCommand(msg) {
             // Só verifica admin se for grupo
             if (isGroup) {
                 const metadata = await getChatMetadata(chat.id._serialized);
+                console.log(`[DEBUG] Metadata obtida:`, metadata ? 'Sim' : 'Não');
+                
                 if (metadata && metadata.participants) {
                     const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
                     console.log(`[DEBUG] Admins do grupo:`, adminIds);
                     console.log(`[DEBUG] Meu ID: ${client.info.wid._serialized}`);
                     botIsAdmin = adminIds.includes(client.info.wid._serialized);
                     console.log(`[DEBUG] Bot é admin? ${botIsAdmin}`);
+                } else {
+                    console.log('[DEBUG] Metadata ou participantes não encontrados, tentando método alternativo...');
+                    // Método alternativo: tenta obter metadata diretamente
+                    try {
+                        const directMetadata = await client.getChatById(chat.id._serialized);
+                        if (directMetadata && directMetadata.participants) {
+                            const adminIds = directMetadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+                            console.log(`[DEBUG] Admins (método direto):`, adminIds);
+                            botIsAdmin = adminIds.includes(client.info.wid._serialized);
+                            console.log(`[DEBUG] Bot é admin (método direto)? ${botIsAdmin}`);
+                        }
+                    } catch (directError) {
+                        console.error('[DEBUG] Erro no método direto:', directError.message);
+                    }
                 }
             }
         } catch (metadataError) {
@@ -713,7 +736,12 @@ async function handleCommand(msg) {
         
         if (!botIsAdmin) {
             console.log('[COMANDO] Bot não é admin, ignorando comando');
-            return; // Apenas ignora, não responde nada
+            // Permite comando de ajuda mesmo sem ser admin
+            if (command === '!ajuda') {
+                console.log('[COMANDO] Permitindo !ajuda mesmo sem ser admin');
+            } else {
+                return; // Apenas ignora, não responde nada
+            }
         }
         
         // Verificar se é admin para TODOS os comandos
