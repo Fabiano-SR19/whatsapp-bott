@@ -715,53 +715,60 @@ async function handleCommand(msg) {
         try {
             // Só verifica admin se for grupo
             if (isGroup) {
+                console.log(`[ADMIN-BOT] Verificando se bot é admin no grupo ${chat.id._serialized}`);
                 const metadata = await getChatMetadata(chat.id._serialized);
-                console.log(`[DEBUG] Metadata obtida:`, metadata ? 'Sim' : 'Não');
+                console.log(`[ADMIN-BOT] Metadata obtida:`, metadata ? 'Sim' : 'Não');
                 
                 if (metadata && metadata.participants) {
                     const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
-                    console.log(`[DEBUG] Admins do grupo:`, adminIds);
-                    console.log(`[DEBUG] Meu ID: ${client.info.wid._serialized}`);
+                    console.log(`[ADMIN-BOT] Admins do grupo:`, adminIds);
+                    console.log(`[ADMIN-BOT] Meu ID: ${client.info.wid._serialized}`);
                     botIsAdmin = adminIds.includes(client.info.wid._serialized);
-                    console.log(`[DEBUG] Bot é admin? ${botIsAdmin}`);
+                    console.log(`[ADMIN-BOT] Bot é admin? ${botIsAdmin}`);
                 } else {
-                    console.log('[DEBUG] Metadata ou participantes não encontrados, tentando método alternativo...');
+                    console.log('[ADMIN-BOT] Metadata ou participantes não encontrados, tentando método alternativo...');
                     // Método alternativo: tenta obter metadata diretamente
                     try {
                         const directMetadata = await client.getChatById(chat.id._serialized);
                         if (directMetadata && directMetadata.participants) {
                             const adminIds = directMetadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
-                            console.log(`[DEBUG] Admins (método direto):`, adminIds);
+                            console.log(`[ADMIN-BOT] Admins (método direto):`, adminIds);
                             botIsAdmin = adminIds.includes(client.info.wid._serialized);
-                            console.log(`[DEBUG] Bot é admin (método direto)? ${botIsAdmin}`);
+                            console.log(`[ADMIN-BOT] Bot é admin (método direto)? ${botIsAdmin}`);
+                        } else {
+                            console.log('[ADMIN-BOT] Metadata direta também não tem participantes');
                         }
                     } catch (directError) {
-                        console.error('[DEBUG] Erro no método direto:', directError.message);
+                        console.error('[ADMIN-BOT] Erro no método direto:', directError.message);
                     }
                 }
+            } else {
+                console.log('[ADMIN-BOT] Não é grupo, bot não precisa ser admin');
+                botIsAdmin = true; // Em chats privados, não precisa ser admin
             }
         } catch (metadataError) {
-            console.error('[COMANDO] Erro ao verificar admin:', metadataError.message);
+            console.error('[ADMIN-BOT] Erro ao verificar admin do bot:', metadataError.message);
             // Se não conseguir verificar admin, assume que não é admin por segurança
             botIsAdmin = false;
         }
         
-        // Para o comando !ajuda, sempre permite execução
-        if (command === '!ajuda') {
-            console.log('[COMANDO] Permitindo !ajuda mesmo sem verificar admin do bot');
-        } else if (!botIsAdmin) {
+        // Todos os comandos precisam que o bot seja admin
+        if (!botIsAdmin) {
             console.log('[COMANDO] Bot não é admin, ignorando comando');
-            return; // Apenas ignora, não responde nada
+            try {
+                await msg.reply('❌ Eu preciso ser admin para executar comandos neste grupo!');
+            } catch (replyError) {
+                console.error('[COMANDO] Erro ao enviar resposta de não-admin:', replyError);
+            }
+            return;
         }
         
-        // Verificar se é admin para TODOS os comandos exceto !ajuda
-        if (command !== '!ajuda') {
-            const senderIsAdmin = await isUserAdmin(msg, participants);
-            console.log(`[COMANDO] Usuário é admin? ${senderIsAdmin}`);
-            if (!senderIsAdmin) {
-                console.log('[COMANDO] Usuário não é admin, enviando resposta de erro');
-                return msg.reply('❌ Você precisa ser admin para executar este comando!');
-            }
+        // Verificar se é admin para TODOS os comandos
+        const senderIsAdmin = await isUserAdmin(msg, participants);
+        console.log(`[COMANDO] Usuário é admin? ${senderIsAdmin}`);
+        if (!senderIsAdmin) {
+            console.log('[COMANDO] Usuário não é admin, enviando resposta de erro');
+            return msg.reply('❌ Você precisa ser admin para executar este comando!');
         }
         
         // Verificar se o bot está ativo para TODOS os comandos exceto !ativar
