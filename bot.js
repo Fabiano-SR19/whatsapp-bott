@@ -932,35 +932,18 @@ async function handleCommand(msg) {
 // EVENTO: Mensagens recebidas
 client.on('message', async msg => {
     try {
-        console.log(`📨 Mensagem recebida: "${msg.body}" de ${msg.author || msg.from} (Status: ${connectionStatus})`);
+        // Verifica se o bot está conectado antes de processar
+        if (connectionStatus !== 'connected') {
+            console.log(`⚠️ Bot não está pronto (status: ${connectionStatus}), ignorando mensagem`);
+            return;
+        }
         
         if (msg.fromMe) {
             console.log('❌ Mensagem minha, ignorando');
             return;
         }
         
-        // Verifica se o bot está conectado antes de processar
-        if (connectionStatus !== 'connected') {
-            console.log(`⚠️ Bot não está pronto (status: ${connectionStatus}), ignorando mensagem`);
-            
-            // Auto-correção rápida para mensagens
-            if (connectionStatus === 'reconnecting' && (Date.now() - reconnectStartTime) > 15000) {
-                console.log('[MENSAGEM] Reconexão travada, forçando verificação de status...');
-                try {
-                    if (client.info && client.info.wid) {
-                        connectionStatus = 'connected';
-                        console.log('[MENSAGEM] Status corrigido para connected');
-                    }
-                } catch (error) {
-                    console.error('[MENSAGEM] Erro ao verificar status:', error);
-                }
-            }
-            
-            // Se ainda não está pronto, ignora a mensagem
-            if (connectionStatus !== 'ready' && connectionStatus !== 'connected') {
-                return;
-            }
-        }
+        console.log(`📨 Mensagem recebida: "${msg.body}" de ${msg.author || msg.from}`);
         
         if (isNewMemberMessage(msg)) {
             console.log('[EVENTO] Mensagem de novo membro detectada:', msg.body);
@@ -973,26 +956,26 @@ client.on('message', async msg => {
         }
         
         // Anti-link - só funciona se bot for admin e estiver ativo
-        const chatInfo = await getChatInfo(msg);
-        if (chatInfo && chatInfo.isGroup) {
-            // Verificar se o bot é admin e está ativo antes de executar anti-link
-            const groupId = chatInfo.chat.id._serialized;
-            const isBotActive = groupSettings[groupId]?.botActive !== false;
-            
-            if (isBotActive) {
-                // Verificar se o bot é admin
-                try {
-                    const metadata = await getChatMetadata(groupId);
-                    if (metadata && metadata.participants) {
-                        const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
-                        const botIsAdmin = adminIds.includes(client.info.wid._serialized);
-                        
-                        if (botIsAdmin) {
-                            await handleAntiLink(msg, chatInfo.chat, chatInfo.participants);
+        if (msg.body.includes('http')) {
+            const chatInfo = await getChatInfo(msg);
+            if (chatInfo && chatInfo.isGroup) {
+                const groupId = chatInfo.chat.id._serialized;
+                const isBotActive = groupSettings[groupId]?.botActive !== false;
+                
+                if (isBotActive) {
+                    try {
+                        const metadata = await getChatMetadata(groupId);
+                        if (metadata && metadata.participants) {
+                            const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+                            const botIsAdmin = adminIds.includes(client.info.wid._serialized);
+                            
+                            if (botIsAdmin) {
+                                await handleAntiLink(msg, chatInfo.chat, chatInfo.participants);
+                            }
                         }
+                    } catch (error) {
+                        console.error('[ANTI-LINK] Erro ao verificar admin para anti-link:', error.message);
                     }
-                } catch (error) {
-                    console.error('[ANTI-LINK] Erro ao verificar admin para anti-link:', error.message);
                 }
             }
         }
