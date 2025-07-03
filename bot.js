@@ -1442,7 +1442,7 @@ client.on('group_join', async (notification) => {
     }
 });
 
-// Reinicializa o cliente WhatsApp a cada 6 horas para evitar travamentos
+// Reinicializa o cliente WhatsApp a cada 2 horas para evitar travamentos
 setInterval(() => {
     console.log('[RESTART] Reinicializando cliente WhatsApp para evitar travamentos...');
     client.destroy().then(() => {
@@ -1451,4 +1451,4 @@ setInterval(() => {
         console.error('[RESTART] Erro ao reinicializar cliente:', err);
         process.exit(1); // Força restart do processo se falhar
     });
-}, 6 * 60 * 60 * 1000); // 6 horas
+}, 2 * 60 * 60 * 1000); // 2 horas
