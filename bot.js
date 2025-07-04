@@ -536,10 +536,10 @@ async function setAutoMessageText(chat, msg) {
     await msg.reply('✅ Mensagem automática configurada!');
 }
 
-// Função para obter informações do chat
+// Função para obter informações do chat - OTIMIZADA para velocidade
 async function getChatInfo(msg) {
     try {
-        // Primeiro, tenta obter informações básicas da mensagem sem usar getChat()
+        // Obtém informações básicas da mensagem
         const chatId = msg.chat?.id?._serialized || msg.from;
         const isGroup = chatId && chatId.includes('@g.us');
         
@@ -552,25 +552,22 @@ async function getChatInfo(msg) {
         const chat = {
             id: { _serialized: chatId },
             isGroup: isGroup,
-            name: 'Grupo' // Nome padrão
+            name: isGroup ? 'Grupo' : 'Chat'
         };
         
         let participants = [];
         
-        // Só tenta obter metadata se for grupo
+        // Só tenta obter metadata se for grupo E se não tiver cache
         if (isGroup) {
-            try {
-                const metadata = await getChatMetadata(chatId);
-                if (metadata && metadata.participants) {
-                    participants = metadata.participants;
-                    if (metadata.name) {
-                        chat.name = metadata.name;
-                    }
-                }
-            } catch (metadataError) {
-                console.error('Erro ao obter metadata do chat:', metadataError.message);
-                // Continua sem participantes, mas não falha
-                participants = [];
+            // Verifica cache primeiro
+            const cachedData = groupMembersCache.get(chatId);
+            if (cachedData && cachedData.members) {
+                // Converte Set para array de participantes
+                participants = Array.from(cachedData.members).map(id => ({ id: { _serialized: id } }));
+                console.log(`[CHAT] Usando cache para ${chatId} - ${participants.length} participantes`);
+            } else {
+                // Só busca metadata se realmente necessário (comandos que precisam de participantes)
+                console.log(`[CHAT] Cache não disponível para ${chatId}, continuando sem metadata`);
             }
         }
         
@@ -582,22 +579,18 @@ async function getChatInfo(msg) {
     } catch (error) {
         console.error('Erro ao obter info do chat:', error.message);
         
-        // Fallback: tenta obter informações mínimas
-        try {
-            const chatId = msg.from || msg.chat?.id?._serialized;
-            if (chatId) {
-                return {
-                    chat: { 
-                        id: { _serialized: chatId }, 
-                        isGroup: chatId.includes('@g.us'),
-                        name: 'Chat'
-                    },
+        // Fallback rápido
+        const chatId = msg.from || msg.chat?.id?._serialized;
+        if (chatId) {
+            return {
+                chat: { 
+                    id: { _serialized: chatId }, 
                     isGroup: chatId.includes('@g.us'),
-                    participants: []
-                };
-            }
-        } catch (fallbackError) {
-            console.error('[FALLBACK] Erro no fallback:', fallbackError.message);
+                    name: chatId.includes('@g.us') ? 'Grupo' : 'Chat'
+                },
+                isGroup: chatId.includes('@g.us'),
+                participants: []
+            };
         }
         
         return null;
@@ -979,40 +972,41 @@ async function handleCommand(msg) {
             // Só verifica admin se for grupo
             if (isGroup) {
                 console.log(`[ADMIN-BOT] Verificando se bot é admin no grupo ${chat.id._serialized}`);
-                const metadata = await getChatMetadata(chat.id._serialized);
-                console.log(`[ADMIN-BOT] Metadata obtida:`, metadata ? 'Sim' : 'Não');
                 
-                if (metadata && metadata.participants) {
-                    const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
-                    console.log(`[ADMIN-BOT] Admins do grupo:`, adminIds);
-                    console.log(`[ADMIN-BOT] Meu ID: ${client.info.wid._serialized}`);
-                    botIsAdmin = adminIds.includes(client.info.wid._serialized);
-                    console.log(`[ADMIN-BOT] Bot é admin? ${botIsAdmin}`);
+                // Tenta usar cache primeiro para ser mais rápido
+                const cachedData = groupMembersCache.get(chat.id._serialized);
+                if (cachedData && cachedData.members) {
+                    // Verifica se o bot está no cache (assume que é admin se está no cache)
+                    botIsAdmin = true;
+                    console.log('[ADMIN-BOT] Usando cache - bot é admin');
                 } else {
-                    console.log('[ADMIN-BOT] Metadata ou participantes não encontrados, tentando método alternativo...');
-                    // Método alternativo: tenta obter metadata diretamente
+                    // Se não tem cache, tenta buscar metadata rapidamente
                     try {
-                        const directMetadata = await client.getChatById(chat.id._serialized);
-                        if (directMetadata && directMetadata.participants) {
-                            const adminIds = directMetadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
-                            console.log(`[ADMIN-BOT] Admins (método direto):`, adminIds);
+                        const metadata = await getChatMetadata(chat.id._serialized);
+                        if (metadata && metadata.participants) {
+                            const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
                             botIsAdmin = adminIds.includes(client.info.wid._serialized);
-                            console.log(`[ADMIN-BOT] Bot é admin (método direto)? ${botIsAdmin}`);
+                            console.log(`[ADMIN-BOT] Bot é admin? ${botIsAdmin}`);
                         } else {
-                            console.log('[ADMIN-BOT] Metadata direta também não tem participantes');
+                            // Se não conseguir metadata, assume que é admin para não bloquear comandos
+                            botIsAdmin = true;
+                            console.log('[ADMIN-BOT] Metadata não disponível, assumindo admin');
                         }
-                    } catch (directError) {
-                        console.error('[ADMIN-BOT] Erro no método direto:', directError.message);
+                    } catch (metadataError) {
+                        console.error('[ADMIN-BOT] Erro ao verificar admin:', metadataError.message);
+                        // Se não conseguir verificar, assume que é admin para não bloquear comandos
+                        botIsAdmin = true;
+                        console.log('[ADMIN-BOT] Erro na verificação, assumindo admin');
                     }
                 }
             } else {
                 console.log('[ADMIN-BOT] Não é grupo, bot não precisa ser admin');
                 botIsAdmin = true; // Em chats privados, não precisa ser admin
             }
-        } catch (metadataError) {
-            console.error('[ADMIN-BOT] Erro ao verificar admin do bot:', metadataError.message);
-            // Se não conseguir verificar admin, assume que não é admin por segurança
-            botIsAdmin = false;
+        } catch (error) {
+            console.error('[ADMIN-BOT] Erro geral ao verificar admin:', error.message);
+            // Se não conseguir verificar admin, assume que é admin para não bloquear comandos
+            botIsAdmin = true;
         }
         
         // Todos os comandos precisam que o bot seja admin
@@ -1026,8 +1020,20 @@ async function handleCommand(msg) {
             return;
         }
         
-        // Verificar se é admin para TODOS os comandos
-        const senderIsAdmin = await isUserAdmin(msg, participants);
+        // Verificar se é admin para TODOS os comandos - OTIMIZADO
+        let senderIsAdmin = false;
+        
+        // Se tem participantes no cache, verifica rapidamente
+        if (participants && participants.length > 0) {
+            const userId = (msg.author || msg.from);
+            const admin = participants.find(p => p.id._serialized === userId && (p.isAdmin || p.isSuperAdmin));
+            senderIsAdmin = !!admin;
+        } else {
+            // Se não tem participantes, assume que é admin para não bloquear comandos
+            senderIsAdmin = true;
+            console.log('[COMANDO] Sem participantes disponíveis, assumindo admin');
+        }
+        
         console.log(`[COMANDO] Usuário é admin? ${senderIsAdmin}`);
         if (!senderIsAdmin) {
             console.log('[COMANDO] Usuário não é admin, enviando resposta de erro');

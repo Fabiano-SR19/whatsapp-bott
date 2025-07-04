@@ -25,7 +25,7 @@ module.exports = {
 
     // Configurações de timeout
     timeouts: {
-        commandTimeout: 8000,   // 8 segundos (muito rápido)
+        commandTimeout: 30000,  // 30 segundos (aumentado para comandos funcionarem)
         retryDelay: 500,        // 500ms entre tentativas (muito rápido)
         maxRetries: 2           // Apenas 2 tentativas (muito agressivo)
     },
