@@ -3,6 +3,7 @@ const qrcode = require('qrcode-terminal');
 const qrcodeImage = require('qrcode');
 const fs = require('fs');
 const http = require('http');
+const CONFIG = require('./config');
 
 // Servidor HTTP simples para health check do Railway
 const server = http.createServer((req, res) => {
@@ -63,43 +64,14 @@ server.listen(PORT, () => {
     console.log(`🔗 Aguarde o Railway gerar a URL pública...`);
 });
 
-// Configurações básicas
-const CONFIG = {
-    welcomeMessage: "🎉 Bem-vindo(a), {user}! Aproveite o grupo {group} e leia as regras fixadas. Qualquer dúvida, chame um admin!",
-    deleteConfirmation: false,
-    maxReconnectAttempts: Infinity, // reconexão infinita
-    reconnectDelay: 5000
-};
+// Configurações básicas já importadas do config.js
 
 // Inicializa o cliente WhatsApp
 const client = new Client({
     authStrategy: new LocalAuth({
         dataPath: './auth_folder'
     }),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-gpu',
-            '--disable-dev-shm-usage',
-            '--disable-web-security',
-            '--disable-features=VizDisplayCompositor',
-            '--disable-extensions',
-            '--disable-plugins',
-            '--disable-images',
-            '--disable-javascript',
-            '--no-first-run',
-            '--no-default-browser-check',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding',
-            '--disable-features=TranslateUI',
-            '--disable-ipc-flooding-protection'
-        ],
-        timeout: 60000,
-        protocolTimeout: 60000
-    }
+    puppeteer: CONFIG.puppeteer
 });
 
 // Armazenamento de estado
@@ -127,6 +99,12 @@ let reconnectStartTime = 0;
 // Variável para registrar o timestamp da última mensagem recebida
 let lastMessageTimestamp = Date.now();
 
+// Novas variáveis para monitoramento mais robusto
+let lastCommandProcessed = Date.now();
+let lastSuccessfulOperation = Date.now();
+let heartbeatFailures = 0;
+let maxHeartbeatFailures = CONFIG.heartbeat.maxFailures;
+
 // Função centralizada para reinicializar o cliente WhatsApp
 let consecutiveReconnectFails = 0;
 async function forceRestartClient(reason) {
@@ -139,6 +117,8 @@ async function forceRestartClient(reason) {
     try {
         await client.initialize();
         consecutiveReconnectFails = 0;
+        heartbeatFailures = 0;
+        lastSuccessfulOperation = Date.now();
         console.log('[RESTART] Cliente reinicializado com sucesso!');
     } catch (err) {
         consecutiveReconnectFails++;
@@ -174,66 +154,133 @@ client.on('disconnected', async (reason) => {
     }
 });
 
-// Heartbeat melhorado para checar sessão a cada 30 segundos
+// Função para verificar se o bot está realmente funcionando
+async function checkBotHealth() {
+    try {
+        // Verifica se o cliente tem informações básicas
+        if (!client.info || !client.info.wid) {
+            console.warn('[HEALTH] Cliente sem informações básicas');
+            return false;
+        }
+
+        // Tenta obter chats para verificar se a API está respondendo
+        const chats = await client.getChats();
+        if (!chats || chats.length === 0) {
+            console.warn('[HEALTH] Não foi possível obter chats');
+            return false;
+        }
+
+        // Verifica se consegue obter informações de um chat específico
+        const testChat = chats[0];
+        const chatInfo = await client.getChatById(testChat.id._serialized);
+        if (!chatInfo) {
+            console.warn('[HEALTH] Não foi possível obter informações do chat de teste');
+            return false;
+        }
+
+        return true;
+    } catch (error) {
+        console.error('[HEALTH] Erro ao verificar saúde do bot:', error.message);
+        return false;
+    }
+}
+
+// Heartbeat melhorado com verificações mais robustas
 setInterval(async () => {
-    // Verifica se está reconectando há muito tempo (mais de 1 minuto)
-    if (isReconnecting && (Date.now() - reconnectStartTime) > 60000) {
-        console.warn('[HEARTBEAT] Reconexão travada há mais de 1 minuto, forçando reset...');
-        isReconnecting = false;
-        connectionStatus = 'error';
-        await forceRestartClient('Reconexão travada > 1min');
-        return;
-    }
-    
-    if (isReconnecting) {
-        console.log('[HEARTBEAT] Reconexão em andamento, pulando verificação...');
-        return;
-    }
-    
     try {
         const now = Date.now();
         const timeSinceLastHeartbeat = now - lastHeartbeat;
-        
-        // Verifica se o cliente está realmente conectado
-        if (!client.info || !client.info.wid) {
-            console.warn('[HEARTBEAT] Sessão não ativa, tentando reconectar...');
-            connectionStatus = 'reconnecting';
-            isReconnecting = true;
-            reconnectStartTime = Date.now();
-            await forceRestartClient('Sessão não ativa no heartbeat');
+        const timeSinceLastMessage = now - lastMessageTimestamp;
+        const timeSinceLastCommand = now - lastCommandProcessed;
+        const timeSinceLastOperation = now - lastSuccessfulOperation;
+
+        console.log(`[HEARTBEAT] Verificando saúde do bot...`);
+        console.log(`[HEARTBEAT] Tempo desde última mensagem: ${Math.floor(timeSinceLastMessage / 1000)}s`);
+        console.log(`[HEARTBEAT] Tempo desde último comando: ${Math.floor(timeSinceLastCommand / 1000)}s`);
+        console.log(`[HEARTBEAT] Tempo desde última operação: ${Math.floor(timeSinceLastOperation / 1000)}s`);
+
+        // Verifica se está reconectando há muito tempo
+        if (isReconnecting && (now - reconnectStartTime) > CONFIG.recovery.reconnectTimeout) {
+            console.warn(`[HEARTBEAT] Reconexão travada há mais de ${Math.floor(CONFIG.recovery.reconnectTimeout / 1000)} segundos, forçando reset...`);
+            isReconnecting = false;
+            connectionStatus = 'error';
+            await forceRestartClient('Reconexão travada > 1min');
             return;
-        } else {
-            // Se o cliente tem info, assume que está conectado
-            if (connectionStatus === 'reconnecting') {
-                console.log('[HEARTBEAT] Status corrigido: estava reconectando mas cliente está OK');
+        }
+
+        if (isReconnecting) {
+            console.log('[HEARTBEAT] Reconexão em andamento, pulando verificação...');
+            return;
+        }
+
+        // Verifica se o bot está realmente saudável
+        const isHealthy = await checkBotHealth();
+        
+        if (!isHealthy) {
+            heartbeatFailures++;
+            console.warn(`[HEARTBEAT] Bot não está saudável (falha ${heartbeatFailures}/${maxHeartbeatFailures})`);
+            
+            if (heartbeatFailures >= maxHeartbeatFailures) {
+                console.error('[HEARTBEAT] Muitas falhas consecutivas, reinicializando cliente...');
+                connectionStatus = 'error';
+                isReconnecting = true;
+                reconnectStartTime = now;
+                await forceRestartClient('Múltiplas falhas de saúde');
+                return;
             }
+        } else {
+            // Bot está saudável, reseta contadores
+            heartbeatFailures = 0;
+            lastSuccessfulOperation = now;
+            
+            // Verifica se não recebeu mensagem há muito tempo
+            if (timeSinceLastMessage > CONFIG.heartbeat.messageTimeout) {
+                console.warn(`[HEARTBEAT] Nenhuma mensagem recebida há mais de ${Math.floor(CONFIG.heartbeat.messageTimeout / 60000)} minutos, pode estar travado`);
+                heartbeatFailures++;
+                
+                if (heartbeatFailures >= maxHeartbeatFailures) {
+                    console.error('[HEARTBEAT] Bot parece estar travado, reinicializando...');
+                    connectionStatus = 'error';
+                    isReconnecting = true;
+                    reconnectStartTime = now;
+                    await forceRestartClient(`Bot travado - sem mensagens > ${Math.floor(CONFIG.heartbeat.messageTimeout / 60000)}min`);
+                    return;
+                }
+            }
+
+            // Verifica se não processou comando há muito tempo
+            if (timeSinceLastCommand > CONFIG.heartbeat.commandTimeout) {
+                console.warn(`[HEARTBEAT] Nenhum comando processado há mais de ${Math.floor(CONFIG.heartbeat.commandTimeout / 60000)} minutos`);
+                heartbeatFailures++;
+                
+                if (heartbeatFailures >= maxHeartbeatFailures) {
+                    console.error('[HEARTBEAT] Bot não está processando comandos, reinicializando...');
+                    connectionStatus = 'error';
+                    isReconnecting = true;
+                    reconnectStartTime = now;
+                    await forceRestartClient(`Bot não processa comandos > ${Math.floor(CONFIG.heartbeat.commandTimeout / 60000)}min`);
+                    return;
+                }
+            }
+
             connectionStatus = 'connected';
             lastHeartbeat = now;
-            console.log(`[HEARTBEAT] Sessão ativa (${timeSinceLastHeartbeat}ms desde último check)`);
+            console.log(`[HEARTBEAT] Bot saudável (${timeSinceLastHeartbeat}ms desde último check)`);
         }
-    } catch (err) {
-        console.error('[HEARTBEAT] Erro ao checar/reconectar sessão:', err);
-        isReconnecting = false;
-        connectionStatus = 'error';
-        await forceRestartClient('Erro ao checar/reconectar sessão');
-    }
 
-    // Heartbeat ativo: tenta buscar chats
-    try {
-        await client.getChats();
     } catch (err) {
-        console.error('[HEARTBEAT] Falha ao buscar chats, reinicializando cliente...');
-        await forceRestartClient('Falha ao buscar chats no heartbeat');
-        return;
+        console.error('[HEARTBEAT] Erro ao verificar saúde do bot:', err);
+        heartbeatFailures++;
+        
+        if (heartbeatFailures >= maxHeartbeatFailures) {
+            console.error('[HEARTBEAT] Muitos erros consecutivos, reinicializando cliente...');
+            connectionStatus = 'error';
+            isReconnecting = true;
+            reconnectStartTime = Date.now();
+            await forceRestartClient('Erros consecutivos no heartbeat');
+        }
     }
-
-    // Se não recebeu mensagem há mais de 10 minutos, reinicia
-    if (Date.now() - lastMessageTimestamp > 10 * 60 * 1000) {
-        console.warn('[HEARTBEAT] Nenhuma mensagem recebida há mais de 10 minutos, reinicializando cliente...');
-        await forceRestartClient('Inatividade de mensagens > 10min');
-        return;
-    }
-}, 2 * 60 * 1000); // Verifica a cada 2 minutos
+}, CONFIG.heartbeat.interval);
 
 // Adiciona evento de autenticação
 client.on('authenticated', () => {
@@ -490,10 +537,12 @@ async function getChatMetadata(chatId) {
 }
 
 // Função para retry de operações
-async function retryOperation(operation, maxRetries = 3, delay = 1000) {
+async function retryOperation(operation, maxRetries = CONFIG.timeouts.maxRetries, delay = CONFIG.timeouts.retryDelay) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            return await operation();
+            const result = await operation();
+            lastSuccessfulOperation = Date.now(); // Registra operação bem-sucedida
+            return result;
         } catch (error) {
             console.error(`[RETRY] Tentativa ${attempt}/${maxRetries} falhou:`, error.message);
             if (attempt === maxRetries) {
@@ -797,7 +846,7 @@ async function handleCommand(msg) {
             } catch (timeoutError) {
                 console.error('[COMANDO] Erro ao enviar resposta de timeout:', timeoutError);
             }
-        }, 15000);
+        }, CONFIG.timeouts.commandTimeout);
         
         const command = msg.body.toLowerCase().trim().split(' ')[0];
         console.log(`[COMANDO] Comando identificado: ${command}`);
@@ -892,64 +941,83 @@ async function handleCommand(msg) {
             case '!ativar':
                 if (!isGroup) return;
                 await toggleBotActivation(chat, msg, true);
+                lastCommandProcessed = Date.now();
                 break;
             case '!desativar':
                 if (!isGroup) return;
                 await toggleBotActivation(chat, msg, false);
+                lastCommandProcessed = Date.now();
                 break;
             case '!fechar':
                 if (!isGroup) return;
                 await setGroupLock(chat, msg, true);
+                lastCommandProcessed = Date.now();
                 break;
             case '!abrir':
                 if (!isGroup) return;
                 await setGroupLock(chat, msg, false);
+                lastCommandProcessed = Date.now();
                 break;
             case '!apagar':
                 await deleteMessage(msg);
+                lastCommandProcessed = Date.now();
                 break;
             case '!boasvindas':
                 if (!isGroup) return;
                 await toggleWelcome(chat, msg);
+                lastCommandProcessed = Date.now();
                 break;
             case '!banir':
                 if (!isGroup) return;
                 await banUser(chat, msg);
+                lastCommandProcessed = Date.now();
                 break;
             case '!cite':
                 if (!isGroup) return;
                 await mentionAll(chat, msg, participants);
+                lastCommandProcessed = Date.now();
                 break;
             case '!ajuda':
                 await showHelp(msg);
+                lastCommandProcessed = Date.now();
                 break;
             case '!status':
                 if (!isGroup) return;
                 await checkBotStatus(chat, msg);
+                lastCommandProcessed = Date.now();
                 break;
             case '!antifake':
                 if (!isGroup) return;
                 await toggleAntiFake(chat, msg);
+                lastCommandProcessed = Date.now();
                 break;
             case '!antilink':
                 if (!isGroup) return;
                 await toggleAntiLink(chat, msg);
+                lastCommandProcessed = Date.now();
                 break;
             case '!autoanuncio':
                 if (!isGroup) return;
                 await toggleAutoMessage(chat, msg);
+                lastCommandProcessed = Date.now();
                 break;
             case '!setanuncio':
                 if (!isGroup) return;
                 await setAutoMessageText(chat, msg);
+                lastCommandProcessed = Date.now();
                 break;
-            case '!promover':
-                if (!isGroup) return;
-                await promoteUser(chat, msg);
-                break;
+                    case '!promover':
+            if (!isGroup) return;
+            await promoteUser(chat, msg);
+            lastCommandProcessed = Date.now();
+            break;
+        case '!ping':
+            await msg.reply('🏓 Pong! Bot está funcionando normalmente.');
+            lastCommandProcessed = Date.now();
+            break;
 
-            default:
-                return; // Ignora comandos desconhecidos
+        default:
+            return; // Ignora comandos desconhecidos
         }
         
         console.log(`[COMANDO] Comando ${command} executado com sucesso`);
@@ -989,6 +1057,7 @@ client.on('message', async msg => {
         
         if (msg.body.startsWith('!')) {
             console.log('🔧 Comando detectado:', msg.body);
+            lastCommandProcessed = Date.now(); // Registra que um comando foi detectado
             await handleCommand(msg);
         }
         
@@ -1033,13 +1102,21 @@ async function checkBotStatus(chat, msg) {
         const cacheSize = cachedData ? cachedData.members.size : 0;
         const cacheAge = cachedData ? Math.floor((Date.now() - cachedData.lastUpdate) / 1000) : 0;
         
+        const timeSinceLastMessage = Math.floor((Date.now() - lastMessageTimestamp) / 1000);
+        const timeSinceLastCommand = Math.floor((Date.now() - lastCommandProcessed) / 1000);
+        const timeSinceLastOperation = Math.floor((Date.now() - lastSuccessfulOperation) / 1000);
+        
         await msg.reply(
             `ℹ️ *Status do bot*:\n` +
             `- *Ativo*: ${isActive ? '✅ SIM' : '❌ NÃO'}\n` +
             `- *Boas-vindas*: ${welcomeEnabled ? '✅ LIGADO' : '❌ DESLIGADO'}\n` +
+            `- *Status da conexão*: ${connectionStatus}\n` +
+            `- *Última mensagem*: ${timeSinceLastMessage}s atrás\n` +
+            `- *Último comando*: ${timeSinceLastCommand}s atrás\n` +
+            `- *Última operação*: ${timeSinceLastOperation}s atrás\n` +
+            `- *Falhas de heartbeat*: ${heartbeatFailures}/${maxHeartbeatFailures}\n` +
             `- *Membros no cache*: ${cacheSize}\n` +
-            `- *Idade do cache*: ${cacheAge}s\n` +
-            `- *Status da conexão*: ${connectionStatus}`
+            `- *Idade do cache*: ${cacheAge}s`
         );
     } catch (error) {
         console.error('Erro ao verificar status:', error);
@@ -1231,7 +1308,8 @@ async function showHelp(msg) {
 🔧 *Controle do Bot*:
 ├── !ativar - Ativa o bot no grupo
 ├── !desativar - Desativa o bot no grupo
-└── !status - Mostra status do bot
+├── !status - Mostra status do bot
+└── !ping - Testa se o bot está funcionando
 
 📌 *Administração* (apenas admins):
 ├── !abrir - Libera o grupo para todos
@@ -1243,7 +1321,7 @@ async function showHelp(msg) {
 ├── !antifake - Ativa/desativa anti-fake
 ├── !antilink - Ativa/desativa anti-link
 ├── !autoanuncio - Ativa/desativa mensagem automática a cada 1h
-├── !setanuncio <msg> - Define a mensagem automática
+└── !setanuncio <msg> - Define a mensagem automática
 
 🎉 *Configurações*:
 └── !boasvindas - Ativa/desativa mensagens de boas-vindas
@@ -1355,7 +1433,7 @@ process.on('uncaughtException', error => {
     // Não encerra o processo para outros erros, apenas loga
 });
 
-// Limpeza de memória a cada 5 minutos
+// Limpeza de memória e watchdog a cada 5 minutos
 setInterval(() => {
     (async () => {
         try {
@@ -1364,8 +1442,8 @@ setInterval(() => {
                 global.gc();
                 console.log('[MEMORY] Garbage collection executada');
             }
-            // Limpa cache de membros antigo (mais de 1 hora)
-            const oneHourAgo = Date.now() - (60 * 60 * 1000);
+            // Limpa cache de membros antigo
+            const oneHourAgo = Date.now() - CONFIG.recovery.cacheExpiry;
             for (const [groupId, cache] of groupMembersCache.entries()) {
                 if (cache.lastUpdate && cache.lastUpdate < oneHourAgo) {
                     groupMembersCache.delete(groupId);
@@ -1373,8 +1451,8 @@ setInterval(() => {
                 }
             }
             // Auto-correção de status travado
-            if (connectionStatus === 'reconnecting' && (Date.now() - reconnectStartTime) > 30000) {
-                console.warn('[AUTO-CORREÇÃO] Status travado em reconnecting há mais de 30 segundos, forçando correção...');
+            if (connectionStatus === 'reconnecting' && (Date.now() - reconnectStartTime) > CONFIG.recovery.reconnectTimeout) {
+                console.warn(`[AUTO-CORREÇÃO] Status travado em reconnecting há mais de ${Math.floor(CONFIG.recovery.reconnectTimeout / 1000)} segundos, forçando correção...`);
                 try {
                     await forceRestartClient('Auto-correção: reconnecting > 30s');
                 } catch (error) {
@@ -1393,11 +1471,29 @@ setInterval(() => {
                     isReconnecting = false;
                 }
             }
+            // Auto-correção para bot travado sem atividade
+            const timeSinceLastMessage = Date.now() - lastMessageTimestamp;
+            const timeSinceLastCommand = Date.now() - lastCommandProcessed;
+            
+            if (timeSinceLastMessage > CONFIG.heartbeat.operationTimeout && timeSinceLastCommand > CONFIG.heartbeat.commandTimeout) {
+                console.warn('[AUTO-CORREÇÃO] Bot sem atividade há muito tempo, forçando reinicialização...');
+                try {
+                    await forceRestartClient('Auto-correção: bot inativo > 20min');
+                } catch (error) {
+                    console.error('[AUTO-CORREÇÃO] Erro ao reinicializar bot inativo:', error);
+                    connectionStatus = 'error';
+                    isReconnecting = false;
+                }
+            }
+            
+            // Watchdog: verifica se o processo está respondendo
+            console.log('[WATCHDOG] Processo está funcionando normalmente');
+            
         } catch (error) {
             console.error('[MEMORY] Erro na limpeza de memória:', error);
         }
     })();
-}, 5 * 60 * 1000); // 5 minutos
+}, CONFIG.recovery.memoryCleanupInterval);
 
 // Adicionar evento nativo para detectar novos participantes
 client.on('group_join', async (notification) => {
@@ -1466,7 +1562,7 @@ client.on('group_join', async (notification) => {
     }
 });
 
-// Reinicializa o cliente WhatsApp a cada 2 horas para evitar travamentos
+// Reinicializa o cliente WhatsApp a cada 1 hora para evitar travamentos
 setInterval(() => {
     console.log('[RESTART] Reinicializando cliente WhatsApp para evitar travamentos...');
     client.destroy().then(() => {
@@ -1475,4 +1571,4 @@ setInterval(() => {
         console.error('[RESTART] Erro ao reinicializar cliente:', err);
         process.exit(1); // Força restart do processo se falhar
     });
-}, 2 * 60 * 60 * 1000); // 2 horas
+}, CONFIG.recovery.forceRestartInterval);
