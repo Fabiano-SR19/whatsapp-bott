@@ -8,19 +8,19 @@ module.exports = {
 
     // Configurações de heartbeat INTELIGENTE
     heartbeat: {
-        interval: 1 * 60 * 1000,        // 1 minuto (detecção rápida)
-        maxFailures: 2,                  // 2 falhas antes de agir (rápido mas não agressivo)
-        messageTimeout: 8 * 60 * 1000,   // 8 minutos sem mensagem (detecta travamento real)
-        commandTimeout: 5 * 60 * 1000,   // 5 minutos sem comando (detecta travamento real)
-        operationTimeout: 12 * 60 * 1000 // 12 minutos sem operação (detecta travamento real)
+        interval: 2 * 60 * 1000,        // 2 minutos (menos frequente)
+        maxFailures: 3,                  // 3 falhas antes de agir (menos agressivo)
+        messageTimeout: 12 * 60 * 1000,  // 12 minutos sem mensagem (mais tolerante)
+        commandTimeout: 8 * 60 * 1000,   // 8 minutos sem comando (mais tolerante)
+        operationTimeout: 15 * 60 * 1000 // 15 minutos sem operação (mais tolerante)
     },
 
     // Configurações de auto-recuperação INTELIGENTE
     recovery: {
-        reconnectTimeout: 45000,                    // 45 segundos (rápido mas não agressivo)
-        memoryCleanupInterval: 3 * 60 * 1000,      // 3 minutos (frequente mas não excessivo)
-        forceRestartInterval: 45 * 60 * 1000,      // 45 minutos (preventivo mas não agressivo)
-        cacheExpiry: 45 * 60 * 1000                // 45 minutos
+        reconnectTimeout: 60000,                    // 60 segundos (mais tolerante)
+        memoryCleanupInterval: 5 * 60 * 1000,      // 5 minutos (menos frequente)
+        forceRestartInterval: 90 * 60 * 1000,      // 90 minutos (menos frequente)
+        cacheExpiry: 60 * 60 * 1000                // 60 minutos
     },
 
     // Configurações de timeout INTELIGENTE

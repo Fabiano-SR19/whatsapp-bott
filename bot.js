@@ -147,14 +147,14 @@ let consecutiveHealthyChecks = 0;
 let watchdogActive = true;
 let lastWatchdogCheck = Date.now();
 let watchdogFailures = 0;
-let maxWatchdogFailures = 2; // 2 falhas antes de agir
+let maxWatchdogFailures = 3; // 3 falhas antes de agir (menos agressivo)
 
 // Sistema de detecção inteligente de problemas
 let problemPatterns = {
     consecutiveErrors: 0,
     lastErrorTime: 0,
-    errorWindow: 5 * 60 * 1000, // 5 minutos
-    maxErrorsInWindow: 3
+    errorWindow: 10 * 60 * 1000, // 10 minutos (mais tolerante)
+    maxErrorsInWindow: 5 // 5 erros antes de ativar emergência
 };
 
 // Sistema de aprendizado de comportamento
@@ -231,11 +231,18 @@ async function checkBotHealth() {
             return false;
         }
 
-        // Teste de conectividade com timeout
+        // Verifica se o cliente está realmente pronto
+        if (!client.pupPage || !client.pupPage.evaluate) {
+            console.warn('[HEALTH] Cliente não está totalmente inicializado');
+            recordProblem('not_ready');
+            return false;
+        }
+
+        // Teste de conectividade com timeout mais longo
         const chats = await Promise.race([
             client.getChats(),
             new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Timeout')), 10000)
+                setTimeout(() => reject(new Error('Timeout')), 15000)
             )
         ]);
 
@@ -262,6 +269,15 @@ async function checkBotHealth() {
         return true;
     } catch (error) {
         console.error('[HEALTH] Erro ao verificar saúde:', error.message);
+        
+        // Se for erro de cliente não inicializado, não conta como problema real
+        if (error.message.includes('Target closed') || 
+            error.message.includes('Protocol error') ||
+            error.message.includes('Cannot read properties of undefined')) {
+            console.warn('[HEALTH] Cliente em processo de inicialização, ignorando erro');
+            return false; // Não registra como problema
+        }
+        
         recordProblem('api_error');
         return false;
     }
@@ -345,9 +361,9 @@ setInterval(async () => {
             heartbeatFailures++;
             console.warn(`[HEARTBEAT] Bot não saudável (falha ${heartbeatFailures}/${maxHeartbeatFailures})`);
             
-            // Só reinicia se estiver em modo de emergência ou muitas falhas
-            if (emergencyMode || heartbeatFailures >= maxHeartbeatFailures) {
-                console.error('[HEARTBEAT] Problema real detectado, reinicializando cliente...');
+            // Só reinicia se estiver em modo de emergência E muitas falhas
+            if (emergencyMode && heartbeatFailures >= maxHeartbeatFailures) {
+                console.error('[HEARTBEAT] Problema real detectado em modo de emergência, reinicializando cliente...');
                 connectionStatus = 'error';
                 isReconnecting = true;
                 reconnectStartTime = now;
@@ -462,7 +478,7 @@ setInterval(async () => {
             const chats = await Promise.race([
                 client.getChats(),
                 new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Timeout')), 8000)
+                    setTimeout(() => reject(new Error('Timeout')), 12000)
                 )
             ]);
             
@@ -475,6 +491,15 @@ setInterval(async () => {
             }
         } catch (error) {
             console.warn('[WATCHDOG] Falha no teste de conectividade:', error.message);
+            
+            // Se for erro de inicialização, não conta como falha
+            if (error.message.includes('Target closed') || 
+                error.message.includes('Protocol error') ||
+                error.message.includes('Cannot read properties of undefined')) {
+                console.warn('[WATCHDOG] Cliente em inicialização, ignorando erro');
+                return;
+            }
+            
             watchdogFailures++;
             
             if (watchdogFailures >= maxWatchdogFailures) {
@@ -1625,11 +1650,11 @@ setInterval(() => {
             const timeSinceLastMessage = Date.now() - lastMessageTimestamp;
             const timeSinceLastCommand = Date.now() - lastCommandProcessed;
             
-            // Só reinicia se estiver em modo de emergência ou muito tempo sem atividade
-            const inactivityThreshold = emergencyMode ? 8 * 60 * 1000 : 15 * 60 * 1000; // 8min em emergência, 15min normal
+            // Só reinicia se estiver em modo de emergência E muito tempo sem atividade
+            const inactivityThreshold = emergencyMode ? 10 * 60 * 1000 : 20 * 60 * 1000; // 10min em emergência, 20min normal
             
-            if (timeSinceLastMessage > inactivityThreshold && timeSinceLastCommand > inactivityThreshold) {
-                console.warn(`[AUTO-CORREÇÃO] Bot inativo por mais de ${Math.floor(inactivityThreshold / 60000)} minutos! Reinicializando...`);
+            if (emergencyMode && timeSinceLastMessage > inactivityThreshold && timeSinceLastCommand > inactivityThreshold) {
+                console.warn(`[AUTO-CORREÇÃO] Bot inativo por mais de ${Math.floor(inactivityThreshold / 60000)} minutos em modo de emergência! Reinicializando...`);
                 try {
                     await forceRestartClient(`Auto-correção: bot inativo > ${Math.floor(inactivityThreshold / 60000)}min`);
                 } catch (error) {
@@ -1639,10 +1664,10 @@ setInterval(() => {
                 }
             }
             
-            // Verificação inteligente: só reinicia se realmente não estiver conectado
-            if (connectionStatus !== 'connected' && (Date.now() - lastHeartbeat) > 8 * 60 * 1000) {
-                console.warn('[AUTO-CORREÇÃO] Cliente não conectado por mais de 8 minutos! Reinicializando...');
-                await forceRestartClient('Auto-correção: cliente não conectado > 8min');
+            // Verificação inteligente: só reinicia se realmente não estiver conectado E em emergência
+            if (emergencyMode && connectionStatus !== 'connected' && (Date.now() - lastHeartbeat) > 10 * 60 * 1000) {
+                console.warn('[AUTO-CORREÇÃO] Cliente não conectado por mais de 10 minutos em modo de emergência! Reinicializando...');
+                await forceRestartClient('Auto-correção: cliente não conectado > 10min');
             }
             
         } catch (error) {
@@ -1728,7 +1753,7 @@ setInterval(async () => {
     
     // Verifica se realmente precisa reinicializar
     const timeSinceLastRestart = Date.now() - lastSuccessfulOperation;
-    if (timeSinceLastRestart < 30 * 60 * 1000) { // 30 minutos
+    if (timeSinceLastRestart < 60 * 60 * 1000) { // 60 minutos (menos frequente)
         console.log('[RESTART-PREVENTIVO] Bot está funcionando bem, pulando reinicialização preventiva');
         return;
     }
