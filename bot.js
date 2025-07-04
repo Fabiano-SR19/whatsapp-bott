@@ -348,7 +348,7 @@ setInterval(async () => {
     }
 }, CONFIG.heartbeat.interval);
 
-// Watchdog ultra-agressivo - verifica a cada 30 segundos
+// Watchdog menos agressivo - verifica a cada 2 minutos
 setInterval(async () => {
     if (!watchdogActive) return;
     
@@ -356,38 +356,49 @@ setInterval(async () => {
         const now = Date.now();
         const timeSinceLastCheck = now - lastWatchdogCheck;
         
-        // Verificação ultra-rápida: só testa se o cliente está vivo
+        // Verificação mais suave: só testa se o cliente tem informações básicas
         if (!client.info || !client.info.wid) {
-            console.error('[WATCHDOG] Cliente morto detectado! Reinicializando imediatamente...');
+            console.warn('[WATCHDOG] Cliente sem informações básicas detectado');
             watchdogFailures++;
             
             if (watchdogFailures >= maxWatchdogFailures) {
-                await forceRestartClient('Watchdog: cliente morto');
+                console.error('[WATCHDOG] Muitas falhas consecutivas, reinicializando...');
+                await forceRestartClient('Watchdog: cliente sem informações');
                 watchdogFailures = 0;
             }
             return;
         }
         
-        // Teste ultra-rápido de conectividade
+        // Teste mais suave de conectividade - só testa se consegue obter chats
         try {
-            await client.getChats();
-            watchdogFailures = 0; // Reset falhas se está funcionando
-            lastWatchdogCheck = now;
+            const chats = await client.getChats();
+            if (chats && chats.length >= 0) {
+                watchdogFailures = 0; // Reset falhas se está funcionando
+                lastWatchdogCheck = now;
+                console.log(`[WATCHDOG] ✅ OK - ${chats.length} chats disponíveis`);
+            } else {
+                throw new Error('Nenhum chat disponível');
+            }
         } catch (error) {
-            console.error('[WATCHDOG] Falha no teste de conectividade:', error.message);
+            console.warn('[WATCHDOG] Falha no teste de conectividade:', error.message);
             watchdogFailures++;
             
             if (watchdogFailures >= maxWatchdogFailures) {
-                console.error('[WATCHDOG] Muitas falhas, reinicializando...');
+                console.error('[WATCHDOG] Muitas falhas consecutivas, reinicializando...');
                 await forceRestartClient('Watchdog: falha de conectividade');
                 watchdogFailures = 0;
             }
         }
     } catch (error) {
         console.error('[WATCHDOG] Erro crítico:', error);
-        await forceRestartClient('Watchdog: erro crítico');
+        watchdogFailures++;
+        
+        if (watchdogFailures >= maxWatchdogFailures) {
+            await forceRestartClient('Watchdog: erro crítico');
+            watchdogFailures = 0;
+        }
     }
-}, 30000); // 30 segundos
+}, 2 * 60 * 1000); // 2 minutos (menos frequente)
 
 // Adiciona evento de autenticação
 client.on('authenticated', () => {
@@ -1460,16 +1471,18 @@ process.on('uncaughtException', error => {
     process.exit(1); // Sempre reinicia o processo
 });
 
-// Monitoramento de memória - reinicia se usar muita memória
+// Monitoramento de memória - menos agressivo
 setInterval(() => {
     const memUsage = process.memoryUsage();
     const memMB = Math.round(memUsage.heapUsed / 1024 / 1024);
     
-    if (memMB > 500) { // Se usar mais de 500MB
-        console.error(`[MEMORY] Uso de memória alto: ${memMB}MB. Reiniciando processo...`);
+    if (memMB > 1000) { // Se usar mais de 1GB
+        console.error(`[MEMORY] Uso de memória muito alto: ${memMB}MB. Reiniciando processo...`);
         process.exit(1);
+    } else if (memMB > 500) {
+        console.warn(`[MEMORY] Uso de memória alto: ${memMB}MB`);
     }
-}, 60000); // Verifica a cada 1 minuto
+}, 5 * 60 * 1000); // Verifica a cada 5 minutos
 
 // Limpeza de memória e watchdog a cada 5 minutos
 setInterval(() => {
@@ -1509,31 +1522,29 @@ setInterval(() => {
                     isReconnecting = false;
                 }
             }
-            // Auto-correção ULTRA-AGRESSIVA para bot travado
+            // Auto-correção menos agressiva para bot travado
             const timeSinceLastMessage = Date.now() - lastMessageTimestamp;
             const timeSinceLastCommand = Date.now() - lastCommandProcessed;
             
-            // Se não houve atividade por mais de 2 minutos, reinicia IMEDIATAMENTE
-            if (timeSinceLastMessage > 2 * 60 * 1000 && timeSinceLastCommand > 2 * 60 * 1000) {
-                console.error('[AUTO-CORREÇÃO] Bot inativo por mais de 2 minutos! Reinicializando IMEDIATAMENTE...');
+            // Se não houve atividade por mais de 10 minutos, reinicia
+            if (timeSinceLastMessage > 10 * 60 * 1000 && timeSinceLastCommand > 10 * 60 * 1000) {
+                console.warn('[AUTO-CORREÇÃO] Bot inativo por mais de 10 minutos! Reinicializando...');
                 try {
-                    await forceRestartClient('Auto-correção: bot inativo > 2min');
+                    await forceRestartClient('Auto-correção: bot inativo > 10min');
                 } catch (error) {
                     console.error('[AUTO-CORREÇÃO] Erro ao reinicializar bot inativo:', error);
                     connectionStatus = 'error';
                     isReconnecting = false;
-                    // Força restart do processo se não conseguir reinicializar
-                    process.exit(1);
                 }
             }
             
             // Watchdog: verifica se o processo está respondendo
             console.log('[WATCHDOG] Processo está funcionando normalmente');
             
-            // Verificação adicional: se o cliente não está conectado por mais de 1 minuto, reinicia
-            if (connectionStatus !== 'connected' && (Date.now() - lastHeartbeat) > 60000) {
-                console.error('[WATCHDOG] Cliente não conectado por mais de 1 minuto! Reinicializando...');
-                await forceRestartClient('Watchdog: cliente não conectado > 1min');
+            // Verificação adicional: se o cliente não está conectado por mais de 5 minutos, reinicia
+            if (connectionStatus !== 'connected' && (Date.now() - lastHeartbeat) > 5 * 60 * 1000) {
+                console.warn('[WATCHDOG] Cliente não conectado por mais de 5 minutos! Reinicializando...');
+                await forceRestartClient('Watchdog: cliente não conectado > 5min');
             }
             
         } catch (error) {
