@@ -695,11 +695,28 @@ async function getChatInfo(msg) {
             name: isGroup ? 'Grupo' : 'Chat'
         };
         
-        // Retorna sem participantes para ser mais rápido
+        // Para comandos que precisam de participantes, busca do metadata
+        const command = msg.body.toLowerCase().trim().split(' ')[0];
+        const commandsNeedingParticipants = ['!cite', '!banir', '!promover'];
+        let participants = [];
+        
+        if (isGroup && commandsNeedingParticipants.includes(command)) {
+            try {
+                const metadata = await getChatMetadata(chatId);
+                if (metadata && metadata.participants) {
+                    participants = metadata.participants;
+                    console.log(`[CHAT] Buscou ${participants.length} participantes para comando ${command}`);
+                }
+            } catch (error) {
+                console.warn('[CHAT] Erro ao buscar participantes, continuando sem:', error.message);
+            }
+        }
+        
+        // Retorna com participantes se disponíveis
         return {
             chat,
             isGroup,
-            participants: []
+            participants
         };
     } catch (error) {
         console.error('Erro ao obter info do chat:', error.message);
@@ -1092,8 +1109,8 @@ async function handleCommand(msg) {
         const { chat, isGroup, participants } = chatInfo;
         console.log(`[COMANDO] Processando em grupo: ${chat.name || 'Nome não disponível'}`);
         
-        // Verificação de admin e ativação para TODOS os comandos exceto !ativar
-        if (isGroup && command !== '!ativar') {
+        // Verificação de admin e ativação para TODOS os comandos exceto !ativar, !ajuda e !ping
+        if (isGroup && !['!ativar', '!ajuda', '!ping', '!status'].includes(command)) {
             // Verifica se o bot está ativo
             const isBotActive = groupSettings[chat.id._serialized]?.botActive !== false;
             console.log(`[COMANDO] Bot ativo no grupo? ${isBotActive}`);
@@ -1123,6 +1140,29 @@ async function handleCommand(msg) {
                 console.log('[COMANDO] Bot não é admin neste grupo');
                 await msg.reply('❌ Bot precisa ser administrador para executar comandos. Promova o bot para admin.');
                 return;
+            }
+            
+            // Verifica se o usuário é admin (para comandos que precisam de permissão)
+            const commandsNeedingUserAdmin = ['!fechar', '!abrir', '!banir', '!promover', '!antifake', '!antilink', '!autoanuncio', '!setanuncio', '!boasvindas'];
+            if (commandsNeedingUserAdmin.includes(command)) {
+                let userIsAdmin = false;
+                try {
+                    const metadata = await getChatMetadata(chat.id._serialized);
+                    if (metadata && metadata.participants) {
+                        userIsAdmin = await isUserAdmin(msg, metadata.participants);
+                    }
+                } catch (error) {
+                    console.warn('[COMANDO] Erro ao verificar admin do usuário:', error.message);
+                    userIsAdmin = false;
+                }
+                
+                console.log(`[COMANDO] Usuário é admin? ${userIsAdmin}`);
+                
+                if (!userIsAdmin) {
+                    console.log('[COMANDO] Usuário não é admin');
+                    await msg.reply('❌ Você precisa ser administrador para executar este comando!');
+                    return;
+                }
             }
         }
         
@@ -1195,18 +1235,18 @@ async function handleCommand(msg) {
                 await setAutoMessageText(chat, msg);
                 lastCommandProcessed = Date.now();
                 break;
-                    case '!promover':
-            if (!isGroup) return;
-            await promoteUser(chat, msg);
-            lastCommandProcessed = Date.now();
-            break;
-        case '!ping':
-            await msg.reply('🏓 Pong! Bot está funcionando normalmente.');
-            lastCommandProcessed = Date.now();
-            break;
+            case '!promover':
+                if (!isGroup) return;
+                await promoteUser(chat, msg);
+                lastCommandProcessed = Date.now();
+                break;
+            case '!ping':
+                await msg.reply('🏓 Pong! Bot está funcionando normalmente.');
+                lastCommandProcessed = Date.now();
+                break;
 
-        default:
-            return; // Ignora comandos desconhecidos
+            default:
+                return; // Ignora comandos desconhecidos
         }
         
         console.log(`[COMANDO] Comando ${command} executado com sucesso`);
@@ -1246,6 +1286,9 @@ client.on('message', async msg => {
         
         if (msg.body.startsWith('!')) {
             console.log('🔧 Comando detectado:', msg.body);
+            console.log(`🔧 Autor: ${msg.author || msg.from}`);
+            console.log(`🔧 Chat: ${msg.chat?.id?._serialized || msg.from}`);
+            console.log(`🔧 É grupo: ${msg.chat?.isGroup || msg.from?.includes('@g.us')}`);
             lastCommandProcessed = Date.now(); // Registra que um comando foi detectado
             await handleCommand(msg);
         }
@@ -1324,13 +1367,35 @@ async function mentionAll(chat, msg, participants) {
         if (!msg.hasQuotedMsg) {
             return msg.reply('⚠️ Responda a mensagem com *!cite* para marcar todos ocultamente');
         }
+        
         const quotedMsg = await msg.getQuotedMessage();
-        const mentions = participants
+        
+        // Se não tem participantes, busca do metadata
+        let finalParticipants = participants;
+        if (!finalParticipants || finalParticipants.length === 0) {
+            try {
+                const metadata = await getChatMetadata(chat.id._serialized);
+                if (metadata && metadata.participants) {
+                    finalParticipants = metadata.participants;
+                    console.log(`[CITE] Buscou ${finalParticipants.length} participantes do metadata`);
+                } else {
+                    return msg.reply('❌ Não foi possível obter lista de participantes');
+                }
+            } catch (error) {
+                console.error('[CITE] Erro ao buscar participantes:', error);
+                return msg.reply('❌ Erro ao obter lista de participantes');
+            }
+        }
+        
+        const mentions = finalParticipants
             .filter(p => !p.isAdmin && !p.isSuperAdmin)
             .map(p => p.id._serialized);
+            
         if (mentions.length === 0) {
             return msg.reply('❌ Não há participantes para mencionar!');
         }
+        
+        console.log(`[CITE] Vai mencionar ${mentions.length} participantes`);
         
         // Obtém o chat real usando o ID
         const realChat = await client.getChatById(chat.id._serialized);
@@ -1362,6 +1427,8 @@ async function mentionAll(chat, msg, participants) {
                 });
             }, chatId, mentions.length);
         }
+        
+        console.log(`[CITE] Comando executado com sucesso - ${mentions.length} membros mencionados`);
     } catch (error) {
         console.error('Erro ao mencionar todos:', error);
         msg.reply('❌ Ocorreu um erro ao mencionar os membros.');
