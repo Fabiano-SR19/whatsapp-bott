@@ -31,11 +31,31 @@ const server = http.createServer((req, res) => {
             reconnectAttempts,
             lastHeartbeat: new Date(lastHeartbeat).toISOString(),
             uptime: process.uptime(),
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            lastMessage: new Date(lastMessageTimestamp).toISOString(),
+            lastCommand: new Date(lastCommandProcessed).toISOString(),
+            heartbeatFailures,
+            watchdogFailures,
+            emergencyMode,
+            memoryUsage: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB'
         };
         
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(status, null, 2));
+    } else if (req.url === '/health') {
+        // Health check ultra-rápido para monitoramento externo
+        const isHealthy = connectionStatus === 'connected' && 
+                         !isReconnecting && 
+                         heartbeatFailures === 0 &&
+                         watchdogFailures === 0;
+        
+        if (isHealthy) {
+            res.writeHead(200, { 'Content-Type': 'text/plain' });
+            res.end('OK');
+        } else {
+            res.writeHead(503, { 'Content-Type': 'text/plain' });
+            res.end('UNHEALTHY');
+        }
     } else {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(`
@@ -46,8 +66,12 @@ const server = http.createServer((req, res) => {
                     <p>Status: ${connectionStatus}</p>
                     <p>Reconectando: ${isReconnecting ? 'Sim' : 'Não'}</p>
                     <p>Tentativas de reconexão: ${reconnectAttempts}</p>
+                    <p>Falhas de heartbeat: ${heartbeatFailures}</p>
+                    <p>Falhas de watchdog: ${watchdogFailures}</p>
+                    <p>Modo de emergência: ${emergencyMode ? 'Ativo' : 'Inativo'}</p>
                     <p><a href="/qr" style="background: #25D366; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">📱 Baixar QR Code</a></p>
                     <p><a href="/status" style="background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">📊 Status JSON</a></p>
+                    <p><a href="/health" style="background: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">🏥 Health Check</a></p>
                     <p>Ou acesse diretamente: <a href="/qr">${req.headers.host}/qr</a></p>
                     <p><small>Se não funcionar, aguarde alguns segundos e tente novamente.</small></p>
                 </body>
@@ -107,6 +131,12 @@ let maxHeartbeatFailures = CONFIG.heartbeat.maxFailures;
 let emergencyMode = false; // Modo de emergência para verificações mais rigorosas
 let consecutiveHealthyChecks = 0; // Contador de verificações saudáveis consecutivas
 
+// Sistema de watchdog ultra-agressivo para uptime máximo
+let watchdogActive = true;
+let lastWatchdogCheck = Date.now();
+let watchdogFailures = 0;
+let maxWatchdogFailures = 1; // Apenas 1 falha antes de reiniciar
+
 // Função centralizada para reinicializar o cliente WhatsApp
 let consecutiveReconnectFails = 0;
 async function forceRestartClient(reason) {
@@ -122,6 +152,8 @@ async function forceRestartClient(reason) {
         heartbeatFailures = 0;
         consecutiveHealthyChecks = 0;
         emergencyMode = false;
+        watchdogFailures = 0;
+        lastWatchdogCheck = Date.now();
         lastSuccessfulOperation = Date.now();
         console.log('[RESTART] Cliente reinicializado com sucesso!');
     } catch (err) {
@@ -315,6 +347,47 @@ setInterval(async () => {
         }
     }
 }, CONFIG.heartbeat.interval);
+
+// Watchdog ultra-agressivo - verifica a cada 30 segundos
+setInterval(async () => {
+    if (!watchdogActive) return;
+    
+    try {
+        const now = Date.now();
+        const timeSinceLastCheck = now - lastWatchdogCheck;
+        
+        // Verificação ultra-rápida: só testa se o cliente está vivo
+        if (!client.info || !client.info.wid) {
+            console.error('[WATCHDOG] Cliente morto detectado! Reinicializando imediatamente...');
+            watchdogFailures++;
+            
+            if (watchdogFailures >= maxWatchdogFailures) {
+                await forceRestartClient('Watchdog: cliente morto');
+                watchdogFailures = 0;
+            }
+            return;
+        }
+        
+        // Teste ultra-rápido de conectividade
+        try {
+            await client.getChats();
+            watchdogFailures = 0; // Reset falhas se está funcionando
+            lastWatchdogCheck = now;
+        } catch (error) {
+            console.error('[WATCHDOG] Falha no teste de conectividade:', error.message);
+            watchdogFailures++;
+            
+            if (watchdogFailures >= maxWatchdogFailures) {
+                console.error('[WATCHDOG] Muitas falhas, reinicializando...');
+                await forceRestartClient('Watchdog: falha de conectividade');
+                watchdogFailures = 0;
+            }
+        }
+    } catch (error) {
+        console.error('[WATCHDOG] Erro crítico:', error);
+        await forceRestartClient('Watchdog: erro crítico');
+    }
+}, 30000); // 30 segundos
 
 // Adiciona evento de autenticação
 client.on('authenticated', () => {
@@ -1449,23 +1522,29 @@ client.initialize().catch(error => {
     process.exit(1);
 });
 
-// Tratamento de erros globais
+// Tratamento de erros globais - MUITO AGRESSIVO para uptime máximo
 process.on('unhandledRejection', error => {
     console.error('❌ Erro não tratado (Promise):', error);
-    if (error && error.message && error.message.includes('Session closed')) {
-        console.error('Sessão do Puppeteer fechada! Reiniciando processo...');
-        process.exit(1);
-    }
+    console.error('🔄 Reiniciando processo Node.js para garantir uptime...');
+    process.exit(1); // Sempre reinicia o processo
 });
 
 process.on('uncaughtException', error => {
     console.error('❌ Exceção não capturada:', error);
-    if (error && error.message && error.message.includes('Session closed')) {
-        console.error('Sessão do Puppeteer fechada! Reiniciando processo...');
+    console.error('🔄 Reiniciando processo Node.js para garantir uptime...');
+    process.exit(1); // Sempre reinicia o processo
+});
+
+// Monitoramento de memória - reinicia se usar muita memória
+setInterval(() => {
+    const memUsage = process.memoryUsage();
+    const memMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+    
+    if (memMB > 500) { // Se usar mais de 500MB
+        console.error(`[MEMORY] Uso de memória alto: ${memMB}MB. Reiniciando processo...`);
         process.exit(1);
     }
-    // Não encerra o processo para outros erros, apenas loga
-});
+}, 60000); // Verifica a cada 1 minuto
 
 // Limpeza de memória e watchdog a cada 5 minutos
 setInterval(() => {
@@ -1505,23 +1584,32 @@ setInterval(() => {
                     isReconnecting = false;
                 }
             }
-            // Auto-correção para bot travado sem atividade
+            // Auto-correção ULTRA-AGRESSIVA para bot travado
             const timeSinceLastMessage = Date.now() - lastMessageTimestamp;
             const timeSinceLastCommand = Date.now() - lastCommandProcessed;
             
-            if (timeSinceLastMessage > CONFIG.heartbeat.operationTimeout && timeSinceLastCommand > CONFIG.heartbeat.commandTimeout) {
-                console.warn('[AUTO-CORREÇÃO] Bot sem atividade há muito tempo, forçando reinicialização...');
+            // Se não houve atividade por mais de 2 minutos, reinicia IMEDIATAMENTE
+            if (timeSinceLastMessage > 2 * 60 * 1000 && timeSinceLastCommand > 2 * 60 * 1000) {
+                console.error('[AUTO-CORREÇÃO] Bot inativo por mais de 2 minutos! Reinicializando IMEDIATAMENTE...');
                 try {
-                    await forceRestartClient('Auto-correção: bot inativo > 20min');
+                    await forceRestartClient('Auto-correção: bot inativo > 2min');
                 } catch (error) {
                     console.error('[AUTO-CORREÇÃO] Erro ao reinicializar bot inativo:', error);
                     connectionStatus = 'error';
                     isReconnecting = false;
+                    // Força restart do processo se não conseguir reinicializar
+                    process.exit(1);
                 }
             }
             
             // Watchdog: verifica se o processo está respondendo
             console.log('[WATCHDOG] Processo está funcionando normalmente');
+            
+            // Verificação adicional: se o cliente não está conectado por mais de 1 minuto, reinicia
+            if (connectionStatus !== 'connected' && (Date.now() - lastHeartbeat) > 60000) {
+                console.error('[WATCHDOG] Cliente não conectado por mais de 1 minuto! Reinicializando...');
+                await forceRestartClient('Watchdog: cliente não conectado > 1min');
+            }
             
         } catch (error) {
             console.error('[MEMORY] Erro na limpeza de memória:', error);
@@ -1596,13 +1684,16 @@ client.on('group_join', async (notification) => {
     }
 });
 
-// Reinicializa o cliente WhatsApp a cada 1 hora para evitar travamentos
-setInterval(() => {
-    console.log('[RESTART] Reinicializando cliente WhatsApp para evitar travamentos...');
-    client.destroy().then(() => {
-        client.initialize();
-    }).catch((err) => {
-        console.error('[RESTART] Erro ao reinicializar cliente:', err);
-        process.exit(1); // Força restart do processo se falhar
-    });
+// Reinicialização preventiva ultra-frequente para uptime máximo
+setInterval(async () => {
+    console.log('[RESTART-PREVENTIVO] Reinicializando cliente WhatsApp para garantir uptime máximo...');
+    try {
+        await client.destroy();
+        await client.initialize();
+        console.log('[RESTART-PREVENTIVO] Reinicialização preventiva concluída com sucesso!');
+    } catch (err) {
+        console.error('[RESTART-PREVENTIVO] Erro na reinicialização preventiva:', err);
+        // Força restart do processo se falhar
+        process.exit(1);
+    }
 }, CONFIG.recovery.forceRestartInterval);
