@@ -211,11 +211,21 @@ client.on('disconnected', async (reason) => {
         reconnectAttempts = 0;
         isReconnecting = false;
         connectionStatus = 'connected';
+        lastSuccessfulOperation = Date.now();
         console.log('✅ Reconexão bem-sucedida!');
     } catch (err) {
         console.error(`❌ Tentativa ${reconnectAttempts} falhou:`, err);
         isReconnecting = false;
-        // Não encerra o processo, tenta de novo na próxima desconexão
+        
+        // Se falhou muitas vezes, tenta reinicializar completamente
+        if (reconnectAttempts >= 5) {
+            console.warn('[RECONEXÃO] Muitas falhas, tentando reinicialização completa...');
+            try {
+                await forceRestartClient('Múltiplas falhas de reconexão');
+            } catch (restartError) {
+                console.error('[RECONEXÃO] Falha na reinicialização:', restartError);
+            }
+        }
     }
 });
 
@@ -1051,6 +1061,7 @@ async function handleCommand(msg) {
         // Verifica se o bot está conectado
         if (connectionStatus !== 'connected') {
             console.log(`[COMANDO] Bot não está pronto (status: ${connectionStatus}), ignorando comando`);
+            await msg.reply('⚠️ Bot está reconectando, tente novamente em alguns segundos.');
             return;
         }
         
@@ -1576,23 +1587,67 @@ function saveGroupSettings() {
     }
 }
 
-// Inicializa o bot
-client.initialize().catch(error => {
-    console.error('Erro ao inicializar o bot:', error);
-    process.exit(1);
-});
+// Inicializa o bot com retry
+async function initializeBot() {
+    let attempts = 0;
+    const maxAttempts = 3;
+    
+    while (attempts < maxAttempts) {
+        try {
+            console.log(`[INIT] Tentativa ${attempts + 1} de inicialização...`);
+            await client.initialize();
+            console.log('[INIT] Bot inicializado com sucesso!');
+            return;
+        } catch (error) {
+            attempts++;
+            console.error(`[INIT] Tentativa ${attempts} falhou:`, error.message);
+            
+            if (attempts >= maxAttempts) {
+                console.error('[INIT] Todas as tentativas falharam, encerrando processo...');
+                process.exit(1);
+            }
+            
+            // Aguarda antes da próxima tentativa
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+    }
+}
 
-// Tratamento de erros globais - MUITO AGRESSIVO para uptime máximo
+initializeBot();
+
+// Tratamento de erros globais - INTELIGENTE para uptime máximo
 process.on('unhandledRejection', error => {
     console.error('❌ Erro não tratado (Promise):', error);
-    console.error('🔄 Reiniciando processo Node.js para garantir uptime...');
-    process.exit(1); // Sempre reinicia o processo
+    
+    // Só reinicia se for erro crítico
+    if (error.message && (
+        error.message.includes('Target closed') ||
+        error.message.includes('Protocol error') ||
+        error.message.includes('Connection closed') ||
+        error.message.includes('Session closed')
+    )) {
+        console.error('🔄 Erro crítico detectado, reiniciando processo Node.js...');
+        process.exit(1);
+    } else {
+        console.warn('⚠️ Erro não crítico, continuando operação...');
+    }
 });
 
 process.on('uncaughtException', error => {
     console.error('❌ Exceção não capturada:', error);
-    console.error('🔄 Reiniciando processo Node.js para garantir uptime...');
-    process.exit(1); // Sempre reinicia o processo
+    
+    // Só reinicia se for erro crítico
+    if (error.message && (
+        error.message.includes('Target closed') ||
+        error.message.includes('Protocol error') ||
+        error.message.includes('Connection closed') ||
+        error.message.includes('Session closed')
+    )) {
+        console.error('🔄 Erro crítico detectado, reiniciando processo Node.js...');
+        process.exit(1);
+    } else {
+        console.warn('⚠️ Exceção não crítica, continuando operação...');
+    }
 });
 
 // Monitoramento de memória - menos agressivo
