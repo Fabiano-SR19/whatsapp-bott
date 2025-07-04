@@ -815,16 +815,16 @@ async function isUserAdmin(msg, participants) {
                 }
             } catch (error) {
                 console.warn('[ADMIN] Erro ao buscar metadata:', error.message);
-                // Se não conseguir buscar, assume que é admin para não bloquear comandos
-                console.log('[ADMIN] Assumindo que é admin (fallback)');
-                return true;
+                // Se não conseguir buscar, retorna false para ser mais seguro
+                console.log('[ADMIN] Erro ao buscar metadata, retornando false');
+                return false;
             }
         }
         
-        // Se ainda não tem participantes, assume que é admin
+        // Se ainda não tem participantes, retorna false
         if (!participants || !Array.isArray(participants) || participants.length === 0) {
-            console.log('[ADMIN] Sem participantes após busca, assumindo que é admin');
-            return true;
+            console.log('[ADMIN] Sem participantes após busca, retornando false');
+            return false;
         }
         
         // Procura o usuário na lista de participantes
@@ -836,29 +836,12 @@ async function isUserAdmin(msg, participants) {
         const isAdmin = !!admin;
         console.log(`[ADMIN] Usuário ${userId} é admin? ${isAdmin}`);
         
-        // Se não encontrou como admin, mas o bot é admin, assume que o usuário também é
-        if (!isAdmin) {
-            try {
-                const botIsAdmin = participants.find(p => {
-                    const participantId = p.id?._serialized || p.id;
-                    return participantId === client.info.wid._serialized && (p.isAdmin || p.isSuperAdmin);
-                });
-                
-                if (botIsAdmin) {
-                    console.log('[ADMIN] Bot é admin, assumindo que usuário também é admin');
-                    return true;
-                }
-            } catch (error) {
-                console.warn('[ADMIN] Erro ao verificar se bot é admin:', error.message);
-            }
-        }
-        
         return isAdmin;
     } catch (error) {
         console.error('[ADMIN] Erro ao verificar admin:', error);
-        // Em caso de erro, assume que é admin para não bloquear comandos
-        console.log('[ADMIN] Erro na verificação, assumindo que é admin (fallback)');
-        return true;
+        // Em caso de erro, retorna false para ser mais seguro
+        console.log('[ADMIN] Erro na verificação, retornando false');
+        return false;
     }
 }
 
@@ -1142,20 +1125,23 @@ async function handleCommand(msg) {
                 return;
             }
             
-            // Verifica se o bot é admin (de forma segura)
+            // Verifica se o bot é admin (de forma rigorosa)
             let botIsAdmin = false;
             try {
                 const metadata = await getChatMetadata(chat.id._serialized);
                 if (metadata && metadata.participants) {
                     const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
                     botIsAdmin = adminIds.includes(client.info.wid._serialized);
+                    console.log(`[COMANDO] Bot é admin? ${botIsAdmin} (ID: ${client.info.wid._serialized})`);
+                    console.log(`[COMANDO] Admins do grupo: ${adminIds.join(', ')}`);
+                } else {
+                    console.log('[COMANDO] Não foi possível obter metadata do grupo');
+                    botIsAdmin = false;
                 }
             } catch (error) {
-                console.warn('[COMANDO] Erro ao verificar admin, assumindo que não é admin:', error.message);
+                console.warn('[COMANDO] Erro ao verificar admin do bot:', error.message);
                 botIsAdmin = false;
             }
-            
-            console.log(`[COMANDO] Bot é admin? ${botIsAdmin}`);
             
             if (!botIsAdmin) {
                 console.log('[COMANDO] Bot não é admin neste grupo');
