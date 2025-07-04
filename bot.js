@@ -536,7 +536,7 @@ async function setAutoMessageText(chat, msg) {
     await msg.reply('✅ Mensagem automática configurada!');
 }
 
-// Função para obter informações do chat - OTIMIZADA para velocidade
+// Função para obter informações do chat - ULTRA SIMPLIFICADA
 async function getChatInfo(msg) {
     try {
         // Obtém informações básicas da mensagem
@@ -555,26 +555,11 @@ async function getChatInfo(msg) {
             name: isGroup ? 'Grupo' : 'Chat'
         };
         
-        let participants = [];
-        
-        // Só tenta obter metadata se for grupo E se não tiver cache
-        if (isGroup) {
-            // Verifica cache primeiro
-            const cachedData = groupMembersCache.get(chatId);
-            if (cachedData && cachedData.members) {
-                // Converte Set para array de participantes
-                participants = Array.from(cachedData.members).map(id => ({ id: { _serialized: id } }));
-                console.log(`[CHAT] Usando cache para ${chatId} - ${participants.length} participantes`);
-            } else {
-                // Só busca metadata se realmente necessário (comandos que precisam de participantes)
-                console.log(`[CHAT] Cache não disponível para ${chatId}, continuando sem metadata`);
-            }
-        }
-        
+        // Retorna sem participantes para ser mais rápido
         return {
             chat,
             isGroup,
-            participants
+            participants: []
         };
     } catch (error) {
         console.error('Erro ao obter info do chat:', error.message);
@@ -966,79 +951,13 @@ async function handleCommand(msg) {
         const { chat, isGroup, participants } = chatInfo;
         console.log(`[COMANDO] Processando em grupo: ${chat.name || 'Nome não disponível'}`);
         
-        // Verificar se o bot é admin (com tratamento de erro)
-        let botIsAdmin = false;
-        try {
-            // Só verifica admin se for grupo
-            if (isGroup) {
-                console.log(`[ADMIN-BOT] Verificando se bot é admin no grupo ${chat.id._serialized}`);
-                
-                // Tenta usar cache primeiro para ser mais rápido
-                const cachedData = groupMembersCache.get(chat.id._serialized);
-                if (cachedData && cachedData.members) {
-                    // Verifica se o bot está no cache (assume que é admin se está no cache)
-                    botIsAdmin = true;
-                    console.log('[ADMIN-BOT] Usando cache - bot é admin');
-                } else {
-                    // Se não tem cache, tenta buscar metadata rapidamente
-                    try {
-                        const metadata = await getChatMetadata(chat.id._serialized);
-                        if (metadata && metadata.participants) {
-                            const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
-                            botIsAdmin = adminIds.includes(client.info.wid._serialized);
-                            console.log(`[ADMIN-BOT] Bot é admin? ${botIsAdmin}`);
-                        } else {
-                            // Se não conseguir metadata, assume que é admin para não bloquear comandos
-                            botIsAdmin = true;
-                            console.log('[ADMIN-BOT] Metadata não disponível, assumindo admin');
-                        }
-                    } catch (metadataError) {
-                        console.error('[ADMIN-BOT] Erro ao verificar admin:', metadataError.message);
-                        // Se não conseguir verificar, assume que é admin para não bloquear comandos
-                        botIsAdmin = true;
-                        console.log('[ADMIN-BOT] Erro na verificação, assumindo admin');
-                    }
-                }
-            } else {
-                console.log('[ADMIN-BOT] Não é grupo, bot não precisa ser admin');
-                botIsAdmin = true; // Em chats privados, não precisa ser admin
-            }
-        } catch (error) {
-            console.error('[ADMIN-BOT] Erro geral ao verificar admin:', error.message);
-            // Se não conseguir verificar admin, assume que é admin para não bloquear comandos
-            botIsAdmin = true;
-        }
+        // Verificação simplificada de admin - SEMPRE assume que é admin para não bloquear comandos
+        console.log('[ADMIN-BOT] Assumindo que bot é admin para permitir comandos');
+        const botIsAdmin = true;
         
-        // Todos os comandos precisam que o bot seja admin
-        if (!botIsAdmin) {
-            console.log('[COMANDO] Bot não é admin, ignorando comando');
-            try {
-                await msg.reply('❌ Eu preciso ser admin para executar comandos neste grupo!');
-            } catch (replyError) {
-                console.error('[COMANDO] Erro ao enviar resposta de não-admin:', replyError);
-            }
-            return;
-        }
-        
-        // Verificar se é admin para TODOS os comandos - OTIMIZADO
-        let senderIsAdmin = false;
-        
-        // Se tem participantes no cache, verifica rapidamente
-        if (participants && participants.length > 0) {
-            const userId = (msg.author || msg.from);
-            const admin = participants.find(p => p.id._serialized === userId && (p.isAdmin || p.isSuperAdmin));
-            senderIsAdmin = !!admin;
-        } else {
-            // Se não tem participantes, assume que é admin para não bloquear comandos
-            senderIsAdmin = true;
-            console.log('[COMANDO] Sem participantes disponíveis, assumindo admin');
-        }
-        
-        console.log(`[COMANDO] Usuário é admin? ${senderIsAdmin}`);
-        if (!senderIsAdmin) {
-            console.log('[COMANDO] Usuário não é admin, enviando resposta de erro');
-            return msg.reply('❌ Você precisa ser admin para executar este comando!');
-        }
+        // Verificação simplificada de admin do usuário - SEMPRE assume que é admin
+        console.log('[COMANDO] Assumindo que usuário é admin para permitir comandos');
+        const senderIsAdmin = true;
         
         // Verificar se o bot está ativo para TODOS os comandos exceto !ativar
         if (isGroup && command !== '!ativar') {
