@@ -8,26 +8,26 @@ module.exports = {
 
     // Configurações de heartbeat e monitoramento
     heartbeat: {
-        interval: 2 * 60 * 1000, // 2 minutos
-        maxFailures: 3,
-        messageTimeout: 15 * 60 * 1000, // 15 minutos sem mensagem
-        commandTimeout: 10 * 60 * 1000, // 10 minutos sem comando
-        operationTimeout: 20 * 60 * 1000 // 20 minutos sem operação
+        interval: 5 * 60 * 1000,        // 5 minutos (aumentado de 2 para 5)
+        maxFailures: 5,                  // Máximo de falhas antes de reiniciar (aumentado de 3 para 5)
+        messageTimeout: 30 * 60 * 1000,  // 30 minutos sem mensagem (aumentado de 15 para 30)
+        commandTimeout: 20 * 60 * 1000,  // 20 minutos sem comando (aumentado de 10 para 20)
+        operationTimeout: 45 * 60 * 1000 // 45 minutos sem operação (aumentado de 20 para 45)
     },
 
     // Configurações de auto-recuperação
     recovery: {
-        reconnectTimeout: 60000, // 1 minuto
-        memoryCleanupInterval: 5 * 60 * 1000, // 5 minutos
-        forceRestartInterval: 1 * 60 * 60 * 1000, // 1 hora
-        cacheExpiry: 60 * 60 * 1000 // 1 hora
+        reconnectTimeout: 120000,                   // 2 minutos (aumentado de 1 para 2)
+        memoryCleanupInterval: 10 * 60 * 1000,     // 10 minutos (aumentado de 5 para 10)
+        forceRestartInterval: 2 * 60 * 60 * 1000,  // 2 horas (aumentado de 1 para 2)
+        cacheExpiry: 60 * 60 * 1000                // 1 hora
     },
 
     // Configurações de timeout
     timeouts: {
-        commandTimeout: 10000, // 10 segundos
-        retryDelay: 1000,
-        maxRetries: 3
+        commandTimeout: 15000,  // 15 segundos (aumentado de 10 para 15)
+        retryDelay: 1000,       // Delay entre tentativas (1 segundo)
+        maxRetries: 3           // Máximo de tentativas
     },
 
     // Configurações do Puppeteer

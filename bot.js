@@ -104,6 +104,8 @@ let lastCommandProcessed = Date.now();
 let lastSuccessfulOperation = Date.now();
 let heartbeatFailures = 0;
 let maxHeartbeatFailures = CONFIG.heartbeat.maxFailures;
+let emergencyMode = false; // Modo de emergência para verificações mais rigorosas
+let consecutiveHealthyChecks = 0; // Contador de verificações saudáveis consecutivas
 
 // Função centralizada para reinicializar o cliente WhatsApp
 let consecutiveReconnectFails = 0;
@@ -118,6 +120,8 @@ async function forceRestartClient(reason) {
         await client.initialize();
         consecutiveReconnectFails = 0;
         heartbeatFailures = 0;
+        consecutiveHealthyChecks = 0;
+        emergencyMode = false;
         lastSuccessfulOperation = Date.now();
         console.log('[RESTART] Cliente reinicializado com sucesso!');
     } catch (err) {
@@ -170,14 +174,8 @@ async function checkBotHealth() {
             return false;
         }
 
-        // Verifica se consegue obter informações de um chat específico
-        const testChat = chats[0];
-        const chatInfo = await client.getChatById(testChat.id._serialized);
-        if (!chatInfo) {
-            console.warn('[HEALTH] Não foi possível obter informações do chat de teste');
-            return false;
-        }
-
+        // Verificação mais suave: só testa se consegue obter chats, não precisa testar chat específico
+        console.log(`[HEALTH] Bot saudável - ${chats.length} chats disponíveis`);
         return true;
     } catch (error) {
         console.error('[HEALTH] Erro ao verificar saúde do bot:', error.message);
@@ -218,7 +216,14 @@ setInterval(async () => {
         
         if (!isHealthy) {
             heartbeatFailures++;
+            consecutiveHealthyChecks = 0; // Reseta contador de verificações saudáveis
             console.warn(`[HEARTBEAT] Bot não está saudável (falha ${heartbeatFailures}/${maxHeartbeatFailures})`);
+            
+            // Ativa modo de emergência após 2 falhas
+            if (heartbeatFailures >= 2 && !emergencyMode) {
+                emergencyMode = true;
+                console.warn('[HEARTBEAT] Ativando modo de emergência - verificações mais rigorosas');
+            }
             
             if (heartbeatFailures >= maxHeartbeatFailures) {
                 console.error('[HEARTBEAT] Muitas falhas consecutivas, reinicializando cliente...');
@@ -228,11 +233,28 @@ setInterval(async () => {
                 await forceRestartClient('Múltiplas falhas de saúde');
                 return;
             }
-        } else {
+                } else {
             // Bot está saudável, reseta contadores
+            if (heartbeatFailures > 0) {
+                console.log(`[HEARTBEAT] Bot recuperou saúde! Resetando contador de falhas (era ${heartbeatFailures})`);
+            }
             heartbeatFailures = 0;
+            consecutiveHealthyChecks++;
             lastSuccessfulOperation = now;
             
+            // Só sai do modo de emergência após 5 verificações saudáveis consecutivas
+            if (emergencyMode && consecutiveHealthyChecks >= 5) {
+                emergencyMode = false;
+                console.log('[HEARTBEAT] Saindo do modo de emergência - bot estável');
+            }
+            
+            // Grace period: não verifica timeouts se o bot acabou de processar algo
+            const gracePeriod = emergencyMode ? 1 * 60 * 1000 : 2 * 60 * 1000; // Grace period menor em modo de emergência
+            const timeSinceLastActivity = Math.min(timeSinceLastMessage, timeSinceLastCommand);
+            
+            if (timeSinceLastActivity < gracePeriod) {
+                console.log(`[HEARTBEAT] Grace period ativo (${Math.floor(timeSinceLastActivity / 1000)}s desde última atividade)`);
+            } else {
             // Verifica se não recebeu mensagem há muito tempo
             if (timeSinceLastMessage > CONFIG.heartbeat.messageTimeout) {
                 console.warn(`[HEARTBEAT] Nenhuma mensagem recebida há mais de ${Math.floor(CONFIG.heartbeat.messageTimeout / 60000)} minutos, pode estar travado`);
@@ -262,10 +284,22 @@ setInterval(async () => {
                     return;
                 }
             }
+        }
 
             connectionStatus = 'connected';
             lastHeartbeat = now;
-            console.log(`[HEARTBEAT] Bot saudável (${timeSinceLastHeartbeat}ms desde último check)`);
+            
+            // Só mostra log detalhado se houver algo importante ou a cada 10 verificações
+            const shouldLogDetailed = heartbeatFailures > 0 || 
+                                    timeSinceLastMessage > 5 * 60 * 1000 || 
+                                    timeSinceLastCommand > 5 * 60 * 1000 ||
+                                    (Math.floor(now / CONFIG.heartbeat.interval) % 10) === 0;
+            
+            if (shouldLogDetailed) {
+                console.log(`[HEARTBEAT] Bot saudável (${timeSinceLastHeartbeat}ms desde último check)`);
+            } else {
+                console.log(`[HEARTBEAT] ✅ OK`);
+            }
         }
 
     } catch (err) {
