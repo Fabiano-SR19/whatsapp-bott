@@ -1113,16 +1113,15 @@ async function handleCommand(msg) {
         const { chat, isGroup, participants } = chatInfo;
         console.log(`[COMANDO] Processando em grupo: ${chat.name || 'Nome não disponível'}`);
         
-        // Verificação de admin e ativação para TODOS os comandos exceto !ativar, !ajuda e !ping
-        if (isGroup && !['!ativar', '!ajuda', '!ping', '!status'].includes(command)) {
+        // Verificação de admin e ativação para TODOS os comandos (sem exceção)
+        if (isGroup) {
             // Verifica se o bot está ativo
             const isBotActive = groupSettings[chat.id._serialized]?.botActive !== false;
             console.log(`[COMANDO] Bot ativo no grupo? ${isBotActive}`);
             
             if (!isBotActive) {
-                console.log('[COMANDO] Bot não está ativo neste grupo');
-                await msg.reply('❌ Bot não está ativo neste grupo. Use *!ativar* para ativá-lo.');
-                return;
+                console.log('[COMANDO] Bot não está ativo neste grupo - ignorando silenciosamente');
+                return; // Ignora silenciosamente
             }
             
             // Verifica se o bot é admin (de forma rigorosa)
@@ -1144,9 +1143,8 @@ async function handleCommand(msg) {
             }
             
             if (!botIsAdmin) {
-                console.log('[COMANDO] Bot não é admin neste grupo');
-                await msg.reply('❌ Bot precisa ser administrador para executar comandos. Promova o bot para admin.');
-                return;
+                console.log('[COMANDO] Bot não é admin neste grupo - ignorando silenciosamente');
+                return; // Ignora silenciosamente
             }
             
             // Verifica se o usuário é admin (para comandos que precisam de permissão)
