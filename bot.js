@@ -1092,20 +1092,36 @@ async function handleCommand(msg) {
         const { chat, isGroup, participants } = chatInfo;
         console.log(`[COMANDO] Processando em grupo: ${chat.name || 'Nome não disponível'}`);
         
-        // Verificação simplificada de admin - SEMPRE assume que é admin para não bloquear comandos
-        console.log('[ADMIN-BOT] Assumindo que bot é admin para permitir comandos');
-        const botIsAdmin = true;
-        
-        // Verificação simplificada de admin do usuário - SEMPRE assume que é admin
-        console.log('[COMANDO] Assumindo que usuário é admin para permitir comandos');
-        const senderIsAdmin = true;
-        
-        // Verificar se o bot está ativo para TODOS os comandos exceto !ativar
+        // Verificação de admin e ativação para TODOS os comandos exceto !ativar
         if (isGroup && command !== '!ativar') {
+            // Verifica se o bot está ativo
             const isBotActive = groupSettings[chat.id._serialized]?.botActive !== false;
             console.log(`[COMANDO] Bot ativo no grupo? ${isBotActive}`);
+            
             if (!isBotActive) {
                 console.log('[COMANDO] Bot não está ativo neste grupo');
+                await msg.reply('❌ Bot não está ativo neste grupo. Use *!ativar* para ativá-lo.');
+                return;
+            }
+            
+            // Verifica se o bot é admin (de forma segura)
+            let botIsAdmin = false;
+            try {
+                const metadata = await getChatMetadata(chat.id._serialized);
+                if (metadata && metadata.participants) {
+                    const adminIds = metadata.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id._serialized);
+                    botIsAdmin = adminIds.includes(client.info.wid._serialized);
+                }
+            } catch (error) {
+                console.warn('[COMANDO] Erro ao verificar admin, assumindo que não é admin:', error.message);
+                botIsAdmin = false;
+            }
+            
+            console.log(`[COMANDO] Bot é admin? ${botIsAdmin}`);
+            
+            if (!botIsAdmin) {
+                console.log('[COMANDO] Bot não é admin neste grupo');
+                await msg.reply('❌ Bot precisa ser administrador para executar comandos. Promova o bot para admin.');
                 return;
             }
         }
