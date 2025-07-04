@@ -37,7 +37,15 @@ const server = http.createServer((req, res) => {
             heartbeatFailures,
             watchdogFailures,
             emergencyMode,
-            memoryUsage: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB'
+            memoryUsage: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
+            // Informações do sistema inteligente
+            intelligentSystem: {
+                avgResponseTime: Math.round(behaviorHistory.avgResponseTime) + 'ms',
+                maxResponseTime: behaviorHistory.maxResponseTime + 'ms',
+                healthyPeriods: behaviorHistory.healthyPeriods,
+                consecutiveErrors: problemPatterns.consecutiveErrors,
+                lastErrorTime: problemPatterns.lastErrorTime ? new Date(problemPatterns.lastErrorTime).toISOString() : null
+            }
         };
         
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -69,6 +77,10 @@ const server = http.createServer((req, res) => {
                     <p>Falhas de heartbeat: ${heartbeatFailures}</p>
                     <p>Falhas de watchdog: ${watchdogFailures}</p>
                     <p>Modo de emergência: ${emergencyMode ? 'Ativo' : 'Inativo'}</p>
+                    <p><strong>Sistema Inteligente:</strong></p>
+                    <p>• Tempo médio de resposta: ${Math.round(behaviorHistory.avgResponseTime)}ms</p>
+                    <p>• Períodos saudáveis: ${behaviorHistory.healthyPeriods}</p>
+                    <p>• Erros consecutivos: ${problemPatterns.consecutiveErrors}</p>
                     <p><a href="/qr" style="background: #25D366; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">📱 Baixar QR Code</a></p>
                     <p><a href="/status" style="background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">📊 Status JSON</a></p>
                     <p><a href="/health" style="background: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">🏥 Health Check</a></p>
@@ -123,19 +135,36 @@ let reconnectStartTime = 0;
 // Variável para registrar o timestamp da última mensagem recebida
 let lastMessageTimestamp = Date.now();
 
-// Novas variáveis para monitoramento mais robusto
+// Sistema de monitoramento INTELIGENTE
 let lastCommandProcessed = Date.now();
 let lastSuccessfulOperation = Date.now();
 let heartbeatFailures = 0;
 let maxHeartbeatFailures = CONFIG.heartbeat.maxFailures;
-let emergencyMode = false; // Modo de emergência para verificações mais rigorosas
-let consecutiveHealthyChecks = 0; // Contador de verificações saudáveis consecutivas
+let emergencyMode = false;
+let consecutiveHealthyChecks = 0;
 
-// Sistema de watchdog ultra-agressivo para uptime máximo
+// Sistema de watchdog INTELIGENTE
 let watchdogActive = true;
 let lastWatchdogCheck = Date.now();
 let watchdogFailures = 0;
-let maxWatchdogFailures = 1; // Apenas 1 falha antes de reiniciar
+let maxWatchdogFailures = 2; // 2 falhas antes de agir
+
+// Sistema de detecção inteligente de problemas
+let problemPatterns = {
+    consecutiveErrors: 0,
+    lastErrorTime: 0,
+    errorWindow: 5 * 60 * 1000, // 5 minutos
+    maxErrorsInWindow: 3
+};
+
+// Sistema de aprendizado de comportamento
+let behaviorHistory = {
+    avgResponseTime: 0,
+    responseTimes: [],
+    maxResponseTime: 30000, // 30 segundos
+    healthyPeriods: 0,
+    lastHealthCheck: Date.now()
+};
 
 // Função centralizada para reinicializar o cliente WhatsApp
 let consecutiveReconnectFails = 0;
@@ -190,28 +219,94 @@ client.on('disconnected', async (reason) => {
     }
 });
 
-// Função para verificar se o bot está realmente funcionando
+// Função de detecção INTELIGENTE de problemas
 async function checkBotHealth() {
+    const startTime = Date.now();
+    
     try {
         // Verifica se o cliente tem informações básicas
         if (!client.info || !client.info.wid) {
             console.warn('[HEALTH] Cliente sem informações básicas');
+            recordProblem('missing_info');
             return false;
         }
 
-        // Tenta obter chats para verificar se a API está respondendo
-        const chats = await client.getChats();
+        // Teste de conectividade com timeout
+        const chats = await Promise.race([
+            client.getChats(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Timeout')), 10000)
+            )
+        ]);
+
         if (!chats || chats.length === 0) {
             console.warn('[HEALTH] Não foi possível obter chats');
+            recordProblem('no_chats');
             return false;
         }
 
-        // Verificação mais suave: só testa se consegue obter chats, não precisa testar chat específico
-        console.log(`[HEALTH] Bot saudável - ${chats.length} chats disponíveis`);
+        // Calcula tempo de resposta
+        const responseTime = Date.now() - startTime;
+        updateBehaviorHistory(responseTime);
+
+        // Verifica se o tempo de resposta está dentro do normal
+        if (responseTime > behaviorHistory.maxResponseTime) {
+            console.warn(`[HEALTH] Tempo de resposta alto: ${responseTime}ms`);
+            recordProblem('slow_response');
+            return false;
+        }
+
+        // Bot está saudável
+        console.log(`[HEALTH] ✅ Saudável - ${chats.length} chats, ${responseTime}ms`);
+        recordSuccess();
         return true;
     } catch (error) {
-        console.error('[HEALTH] Erro ao verificar saúde do bot:', error.message);
+        console.error('[HEALTH] Erro ao verificar saúde:', error.message);
+        recordProblem('api_error');
         return false;
+    }
+}
+
+// Função para registrar problemas e detectar padrões
+function recordProblem(type) {
+    const now = Date.now();
+    problemPatterns.consecutiveErrors++;
+    problemPatterns.lastErrorTime = now;
+    
+    // Verifica se há muitos erros em uma janela de tempo
+    if (problemPatterns.consecutiveErrors >= problemPatterns.maxErrorsInWindow) {
+        console.error(`[INTELLIGENT] Padrão de problemas detectado: ${problemPatterns.consecutiveErrors} erros consecutivos`);
+        emergencyMode = true;
+    }
+}
+
+// Função para registrar sucessos
+function recordSuccess() {
+    problemPatterns.consecutiveErrors = 0;
+    behaviorHistory.healthyPeriods++;
+    
+    // Sai do modo de emergência após 3 períodos saudáveis
+    if (emergencyMode && behaviorHistory.healthyPeriods >= 3) {
+        emergencyMode = false;
+        console.log('[INTELLIGENT] Saindo do modo de emergência - bot estável');
+    }
+}
+
+// Função para atualizar histórico de comportamento
+function updateBehaviorHistory(responseTime) {
+    behaviorHistory.responseTimes.push(responseTime);
+    
+    // Mantém apenas os últimos 10 tempos de resposta
+    if (behaviorHistory.responseTimes.length > 10) {
+        behaviorHistory.responseTimes.shift();
+    }
+    
+    // Calcula tempo médio de resposta
+    behaviorHistory.avgResponseTime = behaviorHistory.responseTimes.reduce((a, b) => a + b, 0) / behaviorHistory.responseTimes.length;
+    
+    // Ajusta tempo máximo baseado no comportamento
+    if (behaviorHistory.avgResponseTime > 0) {
+        behaviorHistory.maxResponseTime = Math.max(30000, behaviorHistory.avgResponseTime * 3);
     }
 }
 
@@ -243,45 +338,33 @@ setInterval(async () => {
             return;
         }
 
-        // Verifica se o bot está realmente saudável
+        // Verifica se o bot está saudável usando sistema inteligente
         const isHealthy = await checkBotHealth();
         
         if (!isHealthy) {
             heartbeatFailures++;
-            consecutiveHealthyChecks = 0; // Reseta contador de verificações saudáveis
-            console.warn(`[HEARTBEAT] Bot não está saudável (falha ${heartbeatFailures}/${maxHeartbeatFailures})`);
+            console.warn(`[HEARTBEAT] Bot não saudável (falha ${heartbeatFailures}/${maxHeartbeatFailures})`);
             
-            // Ativa modo de emergência após 2 falhas
-            if (heartbeatFailures >= 2 && !emergencyMode) {
-                emergencyMode = true;
-                console.warn('[HEARTBEAT] Ativando modo de emergência - verificações mais rigorosas');
-            }
-            
-            if (heartbeatFailures >= maxHeartbeatFailures) {
-                console.error('[HEARTBEAT] Muitas falhas consecutivas, reinicializando cliente...');
+            // Só reinicia se estiver em modo de emergência ou muitas falhas
+            if (emergencyMode || heartbeatFailures >= maxHeartbeatFailures) {
+                console.error('[HEARTBEAT] Problema real detectado, reinicializando cliente...');
                 connectionStatus = 'error';
                 isReconnecting = true;
                 reconnectStartTime = now;
-                await forceRestartClient('Múltiplas falhas de saúde');
+                await forceRestartClient('Problema real detectado pelo sistema inteligente');
                 return;
             }
-                } else {
-            // Bot está saudável, reseta contadores
+        } else {
+            // Bot está saudável
             if (heartbeatFailures > 0) {
-                console.log(`[HEARTBEAT] Bot recuperou saúde! Resetando contador de falhas (era ${heartbeatFailures})`);
+                console.log(`[HEARTBEAT] Bot recuperou saúde! Resetando contador (era ${heartbeatFailures})`);
             }
             heartbeatFailures = 0;
             consecutiveHealthyChecks++;
             lastSuccessfulOperation = now;
             
-            // Só sai do modo de emergência após 5 verificações saudáveis consecutivas
-            if (emergencyMode && consecutiveHealthyChecks >= 5) {
-                emergencyMode = false;
-                console.log('[HEARTBEAT] Saindo do modo de emergência - bot estável');
-            }
-            
-            // Grace period: não verifica timeouts se o bot acabou de processar algo
-            const gracePeriod = emergencyMode ? 1 * 60 * 1000 : 2 * 60 * 1000; // Grace period menor em modo de emergência
+            // Grace period inteligente baseado no comportamento
+            const gracePeriod = emergencyMode ? 1 * 60 * 1000 : 3 * 60 * 1000;
             const timeSinceLastActivity = Math.min(timeSinceLastMessage, timeSinceLastCommand);
             
             if (timeSinceLastActivity < gracePeriod) {
@@ -348,30 +431,41 @@ setInterval(async () => {
     }
 }, CONFIG.heartbeat.interval);
 
-// Watchdog menos agressivo - verifica a cada 2 minutos
+// Watchdog INTELIGENTE - verifica a cada 3 minutos
 setInterval(async () => {
     if (!watchdogActive) return;
     
     try {
         const now = Date.now();
-        const timeSinceLastCheck = now - lastWatchdogCheck;
         
-        // Verificação mais suave: só testa se o cliente tem informações básicas
+        // Só executa se não estiver em reconexão
+        if (isReconnecting) {
+            console.log('[WATCHDOG] Reconexão em andamento, pulando verificação...');
+            return;
+        }
+        
+        // Verificação inteligente: só testa se o cliente tem informações básicas
         if (!client.info || !client.info.wid) {
             console.warn('[WATCHDOG] Cliente sem informações básicas detectado');
             watchdogFailures++;
             
             if (watchdogFailures >= maxWatchdogFailures) {
-                console.error('[WATCHDOG] Muitas falhas consecutivas, reinicializando...');
+                console.error('[WATCHDOG] Problema real detectado, reinicializando...');
                 await forceRestartClient('Watchdog: cliente sem informações');
                 watchdogFailures = 0;
             }
             return;
         }
         
-        // Teste mais suave de conectividade - só testa se consegue obter chats
+        // Teste inteligente de conectividade com timeout
         try {
-            const chats = await client.getChats();
+            const chats = await Promise.race([
+                client.getChats(),
+                new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Timeout')), 8000)
+                )
+            ]);
+            
             if (chats && chats.length >= 0) {
                 watchdogFailures = 0; // Reset falhas se está funcionando
                 lastWatchdogCheck = now;
@@ -384,7 +478,7 @@ setInterval(async () => {
             watchdogFailures++;
             
             if (watchdogFailures >= maxWatchdogFailures) {
-                console.error('[WATCHDOG] Muitas falhas consecutivas, reinicializando...');
+                console.error('[WATCHDOG] Problema real detectado, reinicializando...');
                 await forceRestartClient('Watchdog: falha de conectividade');
                 watchdogFailures = 0;
             }
@@ -398,7 +492,7 @@ setInterval(async () => {
             watchdogFailures = 0;
         }
     }
-}, 2 * 60 * 1000); // 2 minutos (menos frequente)
+}, 3 * 60 * 1000); // 3 minutos (inteligente)
 
 // Adiciona evento de autenticação
 client.on('authenticated', () => {
@@ -1159,7 +1253,12 @@ async function checkBotStatus(chat, msg) {
             `- *Última operação*: ${timeSinceLastOperation}s atrás\n` +
             `- *Falhas de heartbeat*: ${heartbeatFailures}/${maxHeartbeatFailures}\n` +
             `- *Membros no cache*: ${cacheSize}\n` +
-            `- *Idade do cache*: ${cacheAge}s`
+            `- *Idade do cache*: ${cacheAge}s\n\n` +
+            `🧠 *Sistema Inteligente*:\n` +
+            `- *Tempo médio de resposta*: ${Math.round(behaviorHistory.avgResponseTime)}ms\n` +
+            `- *Períodos saudáveis*: ${behaviorHistory.healthyPeriods}\n` +
+            `- *Erros consecutivos*: ${problemPatterns.consecutiveErrors}\n` +
+            `- *Modo de emergência*: ${emergencyMode ? '🔴 ATIVO' : '🟢 INATIVO'}`
         );
     } catch (error) {
         console.error('Erro ao verificar status:', error);
@@ -1522,15 +1621,17 @@ setInterval(() => {
                     isReconnecting = false;
                 }
             }
-            // Auto-correção menos agressiva para bot travado
+            // Auto-correção INTELIGENTE para bot travado
             const timeSinceLastMessage = Date.now() - lastMessageTimestamp;
             const timeSinceLastCommand = Date.now() - lastCommandProcessed;
             
-            // Se não houve atividade por mais de 10 minutos, reinicia
-            if (timeSinceLastMessage > 10 * 60 * 1000 && timeSinceLastCommand > 10 * 60 * 1000) {
-                console.warn('[AUTO-CORREÇÃO] Bot inativo por mais de 10 minutos! Reinicializando...');
+            // Só reinicia se estiver em modo de emergência ou muito tempo sem atividade
+            const inactivityThreshold = emergencyMode ? 8 * 60 * 1000 : 15 * 60 * 1000; // 8min em emergência, 15min normal
+            
+            if (timeSinceLastMessage > inactivityThreshold && timeSinceLastCommand > inactivityThreshold) {
+                console.warn(`[AUTO-CORREÇÃO] Bot inativo por mais de ${Math.floor(inactivityThreshold / 60000)} minutos! Reinicializando...`);
                 try {
-                    await forceRestartClient('Auto-correção: bot inativo > 10min');
+                    await forceRestartClient(`Auto-correção: bot inativo > ${Math.floor(inactivityThreshold / 60000)}min`);
                 } catch (error) {
                     console.error('[AUTO-CORREÇÃO] Erro ao reinicializar bot inativo:', error);
                     connectionStatus = 'error';
@@ -1538,13 +1639,10 @@ setInterval(() => {
                 }
             }
             
-            // Watchdog: verifica se o processo está respondendo
-            console.log('[WATCHDOG] Processo está funcionando normalmente');
-            
-            // Verificação adicional: se o cliente não está conectado por mais de 5 minutos, reinicia
-            if (connectionStatus !== 'connected' && (Date.now() - lastHeartbeat) > 5 * 60 * 1000) {
-                console.warn('[WATCHDOG] Cliente não conectado por mais de 5 minutos! Reinicializando...');
-                await forceRestartClient('Watchdog: cliente não conectado > 5min');
+            // Verificação inteligente: só reinicia se realmente não estiver conectado
+            if (connectionStatus !== 'connected' && (Date.now() - lastHeartbeat) > 8 * 60 * 1000) {
+                console.warn('[AUTO-CORREÇÃO] Cliente não conectado por mais de 8 minutos! Reinicializando...');
+                await forceRestartClient('Auto-correção: cliente não conectado > 8min');
             }
             
         } catch (error) {
@@ -1620,16 +1718,33 @@ client.on('group_join', async (notification) => {
     }
 });
 
-// Reinicialização preventiva ultra-frequente para uptime máximo
+// Reinicialização preventiva INTELIGENTE
 setInterval(async () => {
-    console.log('[RESTART-PREVENTIVO] Reinicializando cliente WhatsApp para garantir uptime máximo...');
+    // Só reinicializa se não estiver em reconexão e estiver saudável
+    if (isReconnecting || emergencyMode) {
+        console.log('[RESTART-PREVENTIVO] Pulando reinicialização - reconexão em andamento ou modo de emergência');
+        return;
+    }
+    
+    // Verifica se realmente precisa reinicializar
+    const timeSinceLastRestart = Date.now() - lastSuccessfulOperation;
+    if (timeSinceLastRestart < 30 * 60 * 1000) { // 30 minutos
+        console.log('[RESTART-PREVENTIVO] Bot está funcionando bem, pulando reinicialização preventiva');
+        return;
+    }
+    
+    console.log('[RESTART-PREVENTIVO] Reinicializando cliente WhatsApp para manter estabilidade...');
     try {
         await client.destroy();
         await client.initialize();
         console.log('[RESTART-PREVENTIVO] Reinicialização preventiva concluída com sucesso!');
+        lastSuccessfulOperation = Date.now();
     } catch (err) {
         console.error('[RESTART-PREVENTIVO] Erro na reinicialização preventiva:', err);
-        // Força restart do processo se falhar
-        process.exit(1);
+        // Só força restart se for erro crítico
+        if (err.message.includes('timeout') || err.message.includes('connection')) {
+            console.error('[RESTART-PREVENTIVO] Erro crítico detectado, reiniciando processo...');
+            process.exit(1);
+        }
     }
 }, CONFIG.recovery.forceRestartInterval);
